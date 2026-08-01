@@ -1,0 +1,40 @@
+import { useEffect, useState } from 'react'
+import { Download, Loader2, RefreshCw } from 'lucide-react'
+import FileBrowser from '@/components/FileBrowser'
+import { downloadSelection, downloadSingle, getFileRoots, isLockConflict, saveBlob } from '@/lib/contractApi'
+import { usePortal } from '@/context/PortalContext'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Notice, Page } from '@/components/PagePrimitives'
+
+export default function DownloadsPage() {
+  const { lastSystemEvent } = usePortal()
+  const [roots, setRoots] = useState(null)
+  const [selected, setSelected] = useState([])
+  const [selectionTypes, setSelectionTypes] = useState({})
+  const [downloading, setDownloading] = useState(false)
+  const [error, setError] = useState(null)
+  const [refreshToken, setRefreshToken] = useState(0)
+  useEffect(() => { getFileRoots().then(setRoots).catch(setError) }, [])
+  useEffect(() => { if (lastSystemEvent?.eventType && ['RESOURCE_ACTIVE', 'RESOURCE_FAILED', 'RESOURCE_INACTIVE'].includes(lastSystemEvent.eventType)) setRefreshToken((v) => v + 1) }, [lastSystemEvent])
+
+  const download = async () => {
+    if (!selected.length) return
+    setDownloading(true); setError(null)
+    try {
+      const result = selected.length === 1 && selectionTypes[selected[0]] === 'file'
+        ? await downloadSingle('qc', selected[0])
+        : await downloadSelection('qc', selected)
+      saveBlob(result); setSelected([]); setSelectionTypes({})
+    } catch (e) { setError(e) } finally { setDownloading(false) }
+  }
+
+  return <Page title="Download files" description="Browse within the QC filesystem root and download files or streamed ZIP selections.">
+    <Card><CardHeader><div className="flex items-start justify-between gap-3"><div><CardTitle>QC file browser</CardTitle><CardDescription className="mt-1">{roots?.qc ? `Root: ${typeof roots.qc === 'string' ? roots.qc : roots.qc.path || 'QC filesystem'}` : 'Loading exposed roots…'}</CardDescription></div><Button variant="outline" size="sm" onClick={() => setRefreshToken((v) => v + 1)}><RefreshCw className="w-3.5 h-3.5" /></Button></div></CardHeader><CardContent className="space-y-4">
+      {error && isLockConflict(error) && <Notice tone="warning"><strong>Resource currently locked</strong><div>{error.message}</div>{error.users.length > 0 && <div className="mt-1">Users: {error.users.join(', ')}</div>}{error.paths.length > 0 && <ul className="font-mono text-xs mt-2">{error.paths.map((path) => <li key={path}>{path}</li>)}</ul>}<Button variant="outline" size="sm" className="mt-3" onClick={download}>Retry download</Button></Notice>}
+      {error && !isLockConflict(error) && <Notice tone="error">{error.message || String(error)}</Notice>}
+      <FileBrowser rootKey="qc" selected={selected} onSelectionChange={(items, change) => { setSelected(items); setSelectionTypes((current) => { const next = { ...current }; if (change.selected) next[change.relative] = change.entry.type; else delete next[change.relative]; return next }) }} refreshToken={refreshToken} />
+      <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted-foreground">{selected.length ? `${selected.length} item(s) selected. Multiple items are returned as qc-download.zip.` : 'Select one or more files or directories.'}</p><Button className="gap-2" disabled={!selected.length || downloading} onClick={download}>{downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}{downloading ? 'Preparing download…' : 'Download selection'}</Button></div>
+    </CardContent></Card>
+  </Page>
+}
