@@ -1,0 +1,109 @@
+# Deployment Orchestrator UI
+
+A React + Vite frontend for orchestrating application deployments to Wildfly, JBoss, and Tomcat servers.
+
+## Local Development
+
+### Prerequisites
+- Node.js 18+
+- npm
+
+### Setup
+```bash
+# Install dependencies
+npm install
+
+# Environment-specific files are already provided:
+# .env.development, .env.simqc, and .env.qc
+```
+
+### Running
+```bash
+# Start Vite; API requests are proxied to localhost:8080
+npm run dev:local
+```
+
+App is available at `http://localhost:3000/deploymentOrchestrator`.
+
+### Environment Variables (`.env`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VITE_APP_NAME` | `Deployment Orchestrator` | App display name |
+| `VITE_FRONTEND_PORT` | `3000` | Vite dev server port |
+| `VITE_BACKEND_URL` | empty | API origin; empty uses relative URLs |
+| `VITE_PROXY_TARGET` | `http://localhost:8080` | Backend target used by the local Vite proxy |
+| `VITE_BASE_PATH` | `/deploymentOrchestrator` | App base path / Spring Boot context path |
+
+### Environment builds
+
+```bash
+npm run build:simqc
+npm run build:qc
+```
+
+Both deployment builds use same-origin API URLs. Environment-specific server
+filesystem roots remain backend configuration and are not embedded in the UI.
+
+---
+
+## Production Build (Static Files for Spring Boot)
+
+The UI is designed to be served as static resources from the Spring Boot app running at context path `/deploymentOrchestrator`.
+
+### 1. Build
+
+```bash
+npm run build
+# or explicitly:
+npm run build:prod
+```
+
+Vite reads `.env.production` automatically. `VITE_BACKEND_URL` is left empty there, so all API calls use **relative URLs** (e.g. `/deploymentOrchestrator/api/deploy`). This means the built output works at any IP/host without any code changes — including `192.168.x.x:8080` on the QC VM.
+
+### 2. Deploy to Spring Boot
+
+Copy the contents of `dist/` into your Spring Boot project:
+
+```
+dist/  →  src/main/resources/static/deploymentOrchestrator/
+```
+
+Your Spring Boot `application.properties` / `application.yml` should have:
+```properties
+server.servlet.context-path=/deploymentOrchestrator
+```
+
+Spring Boot will serve the static files at:
+```
+http://<host>:8080/deploymentOrchestrator/          ← UI
+http://<host>:8080/deploymentOrchestrator/api/...   ← REST API
+```
+
+### 3. QC VM
+
+With VM networking (NAT + Host-only) configured, access the app at:
+```
+http://192.168.x.x:8080/deploymentOrchestrator
+```
+
+No `.env` changes are needed — relative URLs resolve automatically to the correct host.
+
+---
+
+## Project Structure
+
+```
+src/
+  components/                    # Shared application and UI components
+  context/                       # Portal session and operation state
+  lib/                           # API contract and deployment helpers
+  pages/
+    PortalDashboardPage.jsx      # Runtime dashboard
+    JarDeploymentPage.jsx       # JAR deployment workflow
+    WarDeploymentPage.jsx       # WAR deployment workflow
+    DownloadsPage.jsx           # File download workflow
+    TablesPage.jsx              # Database administration tables
+  App.jsx                        # Routes and application providers
+  main.jsx                       # Browser entrypoint
+```
