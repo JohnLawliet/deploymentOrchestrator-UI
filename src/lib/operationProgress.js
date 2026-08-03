@@ -103,8 +103,11 @@ export function reduceOperationProgress(operations, event, now = Date.now()) {
   if (previous?.eventKeys?.includes(key)) return operations
 
   const supplied = event.resources
+  if (TERMINAL_DEPLOYMENT_STATUSES.has(previous?.status)) return operations
   const status = supplied.status ?? previous?.status ?? null
-  const progressPercentage = supplied.progressPercentage ?? previous?.progressPercentage ?? null
+  const progressPercentage = status === 'COMPLETED'
+    ? 100
+    : supplied.progressPercentage ?? previous?.progressPercentage ?? null
   const step = {
     timestamp: event.timestamp,
     phaseCode: supplied.phaseCode,
@@ -140,17 +143,27 @@ export function registerOperationInMap(operations, operation, resourceKey, label
   const deploymentId = deploymentIdOf(operation)
   if (!deploymentId) return operations
   const existing = operations[deploymentId] || {}
+  const registeredOperation = { ...operation }
+  if (operation.resourceType === 'JAR' || String(resourceKey || '').startsWith('JAR:')) {
+    delete registeredOperation.logAvailable
+  }
   return {
     ...operations,
     [deploymentId]: {
       ...existing,
-      ...operation,
+      ...registeredOperation,
       deploymentId,
       resourceKey,
       label,
       registered: true,
       startedAt: existing.startedAt || new Date(now).toISOString(),
       ...(existing.progress ? { progress: existing.progress } : {}),
+      ...(existing.terminalAvailabilityConfirmed !== undefined
+        ? { terminalAvailabilityConfirmed: existing.terminalAvailabilityConfirmed }
+        : {}),
+      ...(existing.logAvailable !== undefined
+        ? { logAvailable: existing.logAvailable }
+        : {}),
     },
   }
 }
@@ -160,6 +173,7 @@ export function reconcileOperationProgress(operations, operationId, record, expe
   if (!existing || !isObject(record) || (existing.progress?.revision || 0) !== expectedRevision) return operations
 
   const previous = existing.progress || {}
+  if (TERMINAL_DEPLOYMENT_STATUSES.has(previous.status)) return operations
   const phaseCode = typeof record.phaseCode === 'string' && record.phaseCode ? record.phaseCode : previous.phaseCode
   const status = record.status === null
     ? previous.status ?? null

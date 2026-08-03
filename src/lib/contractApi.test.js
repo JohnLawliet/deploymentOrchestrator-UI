@@ -27,18 +27,33 @@ vi.mock('axios', () => ({
 }))
 
 import {
+  convertUatBuild,
+  createUpload,
+  deleteFiles,
+  deployJar,
   downloadTerminal,
   executeDatabaseQuery,
+  executeUpload,
   getDatabaseTableRows,
   getDatabaseTables,
+  getJarSnapshots,
+  getUpload,
   getProfiles,
+  getPortStatus,
   getRuntimeResource,
   getWarSnapshots,
+  resolvedTerminalEventUrl,
+  rollbackJar,
+  rollbackUploadItem,
   rollbackWar,
+  preflightUatBuild,
+  releaseUatBuildLock,
   startProfile,
+  stopJar,
   stopProfile,
   subscribeProfileLogs,
   terminalEventUrl,
+  uatBuildOperationEventUrl,
   unsubscribeProfileLogs,
   validateUser,
 } from './contractApi'
@@ -136,6 +151,17 @@ describe('executeDatabaseQuery', () => {
     )
   })
 
+  it('uses the system port inspection and managed JAR stop contracts', async () => {
+    const signal = new AbortController().signal
+    await getPortStatus(8181, 'orders api', signal)
+    await stopJar('orders/api')
+
+    expect(client.get).toHaveBeenCalledWith('/system/ports/8181', {
+      params: { applicationName: 'orders api' }, signal,
+    })
+    expect(client.post).toHaveBeenCalledWith('/dashboard/jars/orders%2Fapi/stop', null)
+  })
+
   it('uses dashboard profiles and canonical deployment-record table endpoints', async () => {
     const signal = new AbortController().signal
 
@@ -171,6 +197,35 @@ describe('executeDatabaseQuery', () => {
     )
   })
 
+  it('sends the root and selected paths in the bulk file deletion body', async () => {
+    client.delete.mockResolvedValue({ data: { success: true } })
+
+    await expect(deleteFiles('techDrive', ['release/a.txt', 'release/b.txt']))
+      .resolves.toEqual({ success: true })
+
+    expect(client.delete).toHaveBeenCalledWith('/files', {
+      data: { rootKey: 'techDrive', paths: ['release/a.txt', 'release/b.txt'] },
+    })
+  })
+
+  it('preserves structured JAR deployment API errors', async () => {
+    client.post.mockRejectedValueOnce({
+      response: {
+        status: 400,
+        data: {
+          code: 'JAR_NOT_EXECUTABLE',
+          message: 'The selected JAR has no executable launcher.',
+        },
+      },
+    })
+
+    await expect(deployJar({ applicationName: 'orders' })).rejects.toMatchObject({
+      status: 400,
+      code: 'JAR_NOT_EXECUTABLE',
+      message: 'The selected JAR has no executable launcher.',
+    })
+  })
+
   it('submits rollback with the selected snapshot and current deployer', async () => {
     await rollbackWar('snapshot-1', 'deploy-user')
 
@@ -180,10 +235,31 @@ describe('executeDatabaseQuery', () => {
     )
   })
 
+  it('uses applicationName for JAR snapshots and submits only the snapshot ID for rollback', async () => {
+    await getJarSnapshots('orders/api')
+    await rollbackJar(123)
+
+    expect(client.get).toHaveBeenCalledWith(
+      '/deployments/qc/jar/snapshots',
+      { params: { applicationName: 'orders/api' } },
+    )
+    expect(client.post).toHaveBeenCalledWith(
+      '/deployments/qc/jar/rollback',
+      { snapshotId: 123 },
+    )
+  })
+
   it('uses the canonical terminal event endpoint without identity query parameters', () => {
     const url = new URL(terminalEventUrl('deployment-1'), 'http://localhost')
     expect(url.pathname).toBe('/deploymentOrchestrator/api/terminals/deployment-1/events')
     expect(url.search).toBe('')
+  })
+
+  it('normalizes an API-relative terminal URL and rejects unrelated supplied paths', () => {
+    expect(new URL(resolvedTerminalEventUrl('/api/terminals/deployment-1/events', 'deployment-1'), 'http://localhost').pathname)
+      .toBe('/deploymentOrchestrator/api/terminals/deployment-1/events')
+    expect(new URL(resolvedTerminalEventUrl('https://untrusted.example/events', 'deployment-1'), 'http://localhost').pathname)
+      .toBe('/deploymentOrchestrator/api/terminals/deployment-1/events')
   })
 
   it('uses canonical profile log subscription endpoints', async () => {
@@ -195,5 +271,39 @@ describe('executeDatabaseQuery', () => {
 
     expect(client.put).toHaveBeenCalledWith('/profiles/profile%2F1/log-subscriptions')
     expect(client.delete).toHaveBeenCalledWith('/profiles/profile%2F1/log-subscriptions')
+  })
+
+  it('uses lockId across the UAT build workflow contracts', async () => {
+    const signal = new AbortController().signal
+    const payload = { application: 'orders', sourceWarPath: 'uat.war' }
+    const conversion = { lockId: 'lock/1', duplicateSelections: { 'web.xml': 'WEB-INF/web.xml' } }
+    client.delete.mockResolvedValue({ data: {} })
+
+    await preflightUatBuild(payload, signal)
+    await releaseUatBuildLock('lock/1')
+    await convertUatBuild(conversion)
+
+    expect(client.post).toHaveBeenNthCalledWith(1, '/uat-builds/preflight', payload, { signal })
+    expect(client.delete).toHaveBeenCalledWith('/uat-builds/locks/lock%2F1')
+    expect(client.post).toHaveBeenNthCalledWith(2, '/uat-builds/convert', conversion)
+    expect(uatBuildOperationEventUrl('operation/1')).toBe('http://localhost:8080/deploymentOrchestrator/api/uat-builds/operations/operation%2F1')
+  })
+
+  it('uses the upload operation ID across execute, refresh, and item rollback', async () => {
+    const payload = { mode: 'REGULAR', sourcePaths: ['release/assets'], target: { kind: 'QC_PATH', reference: 'qc1/import' } }
+
+    await createUpload(payload)
+    await getUpload('operation/1')
+    await executeUpload('operation/1', { 'a/config.xml': 'WEB-INF/classes/config.xml' })
+    await rollbackUploadItem('operation/1', 'a/config.xml')
+
+    expect(client.post).toHaveBeenNthCalledWith(1, '/uploads', payload)
+    expect(client.get).toHaveBeenCalledWith('/uploads/operation%2F1')
+    expect(client.post).toHaveBeenNthCalledWith(2, '/uploads/operation%2F1/execute', {
+      selectedTargets: { 'a/config.xml': 'WEB-INF/classes/config.xml' },
+    })
+    expect(client.post).toHaveBeenNthCalledWith(3, '/uploads/operation%2F1/rollback', {
+      sourcePath: 'a/config.xml',
+    })
   })
 })

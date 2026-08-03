@@ -17,6 +17,7 @@ import {
   registerOperationInMap,
 } from '@/lib/operationProgress'
 import { getStoredPortalUsername, PORTAL_USERNAME_SESSION_KEY } from '@/lib/portalSession'
+import { UPLOAD_EVENT_TYPES } from '@/lib/uploadContract'
 
 const PortalContext = createContext(null)
 const systemEvents = [
@@ -24,18 +25,65 @@ const systemEvents = [
   'RESOURCE_INACTIVE', 'RESOURCE_FAILED', 'DEPLOYMENT_SUCCEEDED', 'DEPLOYMENT_FAILED',
   'TERMINAL_AVAILABLE', 'TERMINAL_CLOSED', 'WAR_PREFLIGHT_READY',
   'WAR_PREFLIGHT_CANCELLED', 'DEPLOYMENT_LOG_AVAILABLE', 'FRONTEND_INACTIVE',
-  'FRONTEND_CONFIGURATION_INVALID', 'PROFILE_LOG_UNAVAILABLE',
+  'FRONTEND_PROFILE_UNRESOLVED', 'FRONTEND_CONFIGURATION_INVALID', 'PROFILE_LOG_UNAVAILABLE',
 ]
+const frontendWarningEvents = new Set([
+  'FRONTEND_INACTIVE', 'FRONTEND_PROFILE_UNRESOLVED', 'FRONTEND_CONFIGURATION_INVALID',
+])
+const jarReconciliationEvents = new Set([
+  'RESOURCE_ACTIVE', 'RESOURCE_FAILED', 'DEPLOYMENT_SUCCEEDED', 'DEPLOYMENT_FAILED',
+])
 const eventStatuses = {
   RESOURCE_STARTING: 'STARTING', RESOURCE_DEPLOYING: 'DEPLOYING',
   RESOURCE_ACTIVE: 'ACTIVE', RESOURCE_STOPPING: 'STOPPING',
   RESOURCE_INACTIVE: 'INACTIVE', RESOURCE_FAILED: 'FAILED',
 }
 const mapById = (items) => Object.fromEntries((Array.isArray(items) ? items : []).filter((item) => item?.id).map((item) => [item.id, item]))
-const eventResourceId = (event) => String(event.profileId || event.resourceKey || event.resources?.id || '').replace(/^(WILDFLY_PROFILE|JAR):/, '')
+export const mapFrontendProfiles = (items) => Object.fromEntries(
+  (Array.isArray(items) ? items : [])
+    .filter((item) => item?.profileName)
+    .map((item) => [item.profileName, item]),
+)
 const eventResourceType = (event) => event.resourceType
   || (String(event.resourceKey || '').startsWith('JAR:') ? 'JAR' : 'WILDFLY_PROFILE')
+const eventResourceId = (event) => String(
+  eventResourceType(event) === 'JAR'
+    ? event.resourceKey || event.resources?.id || ''
+    : event.profileId || event.resourceKey || event.resources?.id || '',
+).replace(/^(WILDFLY_PROFILE|JAR):/, '')
 const eventProfileId = (event) => String(event.profileId || eventResourceId(event) || '')
+
+export const isFrontendWarningEvent = (eventType) => frontendWarningEvents.has(eventType)
+
+export function jarResourceKeyForReconciliation(event) {
+  if (!event?.resourceKey || !jarReconciliationEvents.has(event.eventType) || eventResourceType(event) !== 'JAR') return null
+  return event.resourceType
+    ? `${event.resourceType}:${eventResourceId(event)}`
+    : event.resourceKey
+}
+
+export function mergeOperationEventRecord(currentRecord, event) {
+  const deploymentId = deploymentIdOf(event)
+  const jarTerminalEvent = eventResourceType(event) === 'JAR'
+  const auxiliaryEvent = isFrontendWarningEvent(event.eventType) || event.eventType === 'DEPLOYMENT_LOG_AVAILABLE'
+  const terminalAvailabilityConfirmed = jarTerminalEvent && event.eventType === 'TERMINAL_AVAILABLE'
+    ? true
+    : jarTerminalEvent && event.eventType === 'TERMINAL_CLOSED'
+      ? false
+      : currentRecord?.terminalAvailabilityConfirmed
+  return {
+    ...currentRecord,
+    ...withDeploymentIdentity(event),
+    deploymentId,
+    statusEvent: auxiliaryEvent
+      ? currentRecord?.statusEvent
+      : event.eventType,
+    message: auxiliaryEvent ? currentRecord?.message : event.message ?? currentRecord?.message,
+    logAvailable: event.eventType === 'DEPLOYMENT_LOG_AVAILABLE' || currentRecord?.logAvailable,
+    frontendWarning: isFrontendWarningEvent(event.eventType) ? event.message : currentRecord?.frontendWarning,
+    ...(terminalAvailabilityConfirmed !== undefined ? { terminalAvailabilityConfirmed } : {}),
+  }
+}
 
 export function mergeActivityMap(map, event) {
   const id = eventResourceId(event)
@@ -119,7 +167,7 @@ export function PortalProvider({ children }) {
   const [validated, setValidated] = useState(false)
   const [validationState, setValidationState] = useState(username ? 'validating' : 'idle')
   const [validationError, setValidationError] = useState('')
-  const [activityMaps, setActivityMaps] = useState({ wildflyProfileActivityMap: {}, jarProfileActivityMap: {} })
+  const [activityMaps, setActivityMaps] = useState({ wildflyProfileActivityMap: {}, jarProfileActivityMap: {}, frontendProfileActivityMap: {} })
   const [systemStatus, setSystemStatus] = useState('disconnected')
   const [lastSystemEvent, setLastSystemEvent] = useState(null)
   const [operations, setOperations] = useState({})
@@ -229,12 +277,14 @@ export function PortalProvider({ children }) {
           setActivityMaps({
             wildflyProfileActivityMap: mapById(snapshot.wildflyProfiles),
             jarProfileActivityMap: mapById(snapshot.jarProfiles),
+            frontendProfileActivityMap: mapFrontendProfiles(snapshot.frontendProfiles),
           })
           setLastSystemEvent(event)
           return
         }
         if (event.eventType === 'OPERATION_PROGRESS') {
           updateOperations((current) => reduceOperationProgress(current, event))
+          if (event.resources?.status === 'COMPLETED') setLastSystemEvent(event)
           return
         }
         if (event.eventType === 'PROFILE_LOG') {
@@ -244,6 +294,10 @@ export function PortalProvider({ children }) {
             ...current,
             [profileId]: [...(current[profileId] || []).slice(-999), event],
           }))
+          return
+        }
+        if (UPLOAD_EVENT_TYPES.has(event.eventType)) {
+          setLastSystemEvent(event)
           return
         }
         if (!systemEvents.includes(event.eventType)) return
@@ -268,25 +322,12 @@ export function PortalProvider({ children }) {
         if (event.eventType === 'TERMINAL_AVAILABLE' && eventResourceType(event) === 'WILDFLY_PROFILE') {
           reconcileProfileActivity(eventProfileId(event)).catch(() => {})
         }
-        if (event.resourceKey && ['DEPLOYMENT_SUCCEEDED', 'DEPLOYMENT_FAILED'].includes(event.eventType)) {
-          if (event.resourceType === 'JAR' || String(event.resourceKey).startsWith('JAR:')) {
-            const resourceKey = event.resourceType
-              ? `${event.resourceType}:${eventResourceId(event)}`
-              : event.resourceKey
-            reconcileResourceActivity(resourceKey).catch(() => {})
-          }
-        }
+        const jarResourceKey = jarResourceKeyForReconciliation(event)
+        if (jarResourceKey) reconcileResourceActivity(jarResourceKey).catch(() => {})
         const deploymentId = deploymentIdOf(event)
         if (deploymentId) updateOperations((current) => ({
           ...current,
-          [deploymentId]: {
-            ...current[deploymentId],
-            ...withDeploymentIdentity(event),
-            deploymentId,
-            statusEvent: ['FRONTEND_INACTIVE', 'FRONTEND_CONFIGURATION_INVALID', 'DEPLOYMENT_LOG_AVAILABLE'].includes(event.eventType) ? current[deploymentId]?.statusEvent : event.eventType,
-            logAvailable: event.eventType === 'DEPLOYMENT_LOG_AVAILABLE' || current[deploymentId]?.logAvailable,
-            frontendWarning: ['FRONTEND_INACTIVE', 'FRONTEND_CONFIGURATION_INVALID'].includes(event.eventType) ? event.message : current[deploymentId]?.frontendWarning,
-          },
+          [deploymentId]: mergeOperationEventRecord(current[deploymentId], event),
         }))
       } catch { setSystemStatus('reconnecting') }
     }
@@ -319,7 +360,7 @@ export function PortalProvider({ children }) {
 
   const changeUser = useCallback(() => {
     sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY)
-    setValidated(false); setUsername(''); setActivityMaps({ wildflyProfileActivityMap: {}, jarProfileActivityMap: {} }); updateOperations({}); setViewingOperation(null); setProfileLogLines({})
+    setValidated(false); setUsername(''); setActivityMaps({ wildflyProfileActivityMap: {}, jarProfileActivityMap: {}, frontendProfileActivityMap: {} }); updateOperations({}); setViewingOperation(null); setProfileLogLines({})
     setValidationState('idle'); setSystemStatus('disconnected')
   }, [updateOperations])
 

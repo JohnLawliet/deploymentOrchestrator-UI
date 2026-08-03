@@ -1,17 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchEventSource } from '@microsoft/fetch-event-source'
-import { Activity, ChevronDown, ChevronUp, Download, Loader2, Pause, Play, Power, Terminal, Trash2, X } from 'lucide-react'
+import { Activity, ChevronDown, ChevronUp, Download, Loader2, Pause, Play, Power, Terminal, X } from 'lucide-react'
 import RollbackButton from '@/components/RollbackButton'
 import { usePortal } from '@/context/PortalContext'
 import {
-  deleteTerminal,
   downloadTerminal,
   getOperation,
   saveBlob,
   stopProfile,
   subscribeProfileLogs,
-  techDriveHeaders,
-  terminalEventUrl,
   unsubscribeProfileLogs,
 } from '@/lib/contractApi'
 import { deploymentIdOf } from '@/lib/deploymentIdentity'
@@ -28,14 +24,22 @@ const terminalStates = new Set([
   'INACTIVE',
 ])
 
+const lifecycleStatuses = {
+  DEPLOYMENT_FAILED: 'FAILED',
+  DEPLOYMENT_SUCCEEDED: 'COMPLETED',
+  RESOURCE_FAILED: 'FAILED',
+  RESOURCE_ACTIVE: 'ACTIVE',
+  RESOURCE_INACTIVE: 'INACTIVE',
+}
+
+const missingJarLogMessage = 'No jarDeployment.log was produced because the application launcher did not start.'
+
 export default function OperationProgressPanel() {
   const {
     viewingOperation,
     setViewingOperation,
     operations,
     reconcileResourceActivity,
-    username,
-    jarProfileActivityMap,
     profileLogLines,
     clearProfileLogs,
   } = usePortal()
@@ -44,23 +48,24 @@ export default function OperationProgressPanel() {
   const [actionError, setActionError] = useState('')
   const [actionMessage, setActionMessage] = useState('')
   const [expanded, setExpanded] = useState(true)
-  const [lines, setLines] = useState([])
   const [connection, setConnection] = useState('disconnected')
   const [connectionError, setConnectionError] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
   const outputRef = useRef(null)
   const releasedProfileRef = useRef('')
-  const releasedTerminalRef = useRef('')
   const operationId = deploymentIdOf(viewingOperation)
   const live = operationId ? operations[operationId] : null
   const operationProgress = live?.progress
-  const status = operationProgress?.status
+  const lifecycleStatus = lifecycleStatuses[live?.statusEvent]
+  const status = lifecycleStatus
+    || operationProgress?.status
     || live?.statusEvent
     || live?.state
     || record?.status
     || viewingOperation?.status
     || 'STARTING'
-  const phaseCode = operationProgress?.phaseCode || record?.phaseCode
+  const statusTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(status)
+  const phaseCode = statusTerminal ? undefined : operationProgress?.phaseCode || record?.phaseCode
   const suppliedProgress = Number.isFinite(operationProgress?.progressPercentage)
     ? operationProgress.progressPercentage
     : Number.isFinite(record?.progressPercentage)
@@ -70,10 +75,15 @@ export default function OperationProgressPanel() {
   const failed = status.includes('FAILED')
   const cancelled = status === 'CANCELLED'
   const complete = completed || terminalStates.has(status)
-  const progress = completed ? 100 : suppliedProgress ?? (terminalStates.has(status) ? 100 : undefined)
+  const progress = completed
+    ? 100
+    : failed || cancelled
+      ? undefined
+      : suppliedProgress ?? (terminalStates.has(status) ? 100 : undefined)
   const progressWidth = Math.min(100, Math.max(0, progress ?? 32))
-  const message = operationProgress?.message
+  const message = (lifecycleStatus ? live?.message : operationProgress?.message)
     || live?.message
+    || operationProgress?.message
     || record?.message
     || (complete
       ? 'Operation reached a terminal resource state.'
@@ -91,16 +101,12 @@ export default function OperationProgressPanel() {
   const resourceType = viewingOperation?.resourceType
     || (String(resourceKey).startsWith('JAR:') ? 'JAR' : 'WILDFLY_PROFILE')
   const profileId = viewingOperation?.profileId || String(resourceKey).replace(/^WILDFLY_PROFILE:/, '')
-  const jarId = String(resourceKey).replace(/^JAR:/, '')
   const profileOutput = resourceType === 'WILDFLY_PROFILE' && viewingOperation?.outputRequested && !!profileId
-  const jarTerminalAvailable = resourceType === 'JAR'
-    && !!operationId
-    && jarProfileActivityMap?.[jarId]?.currentDeploymentId === operationId
-  const outputVisible = profileOutput || jarTerminalAvailable
-  const outputLines = profileOutput ? (profileLogLines?.[profileId] || []) : lines
+  const outputLines = profileLogLines?.[profileId] || []
   const operationType = live?.operationType || viewingOperation?.operationType || record?.type
   const warDeployment = operationType === 'WAR_DEPLOY' || operationType === 'QC_WAR'
   const showFailedWarLog = false
+  const showJarLog = resourceType === 'JAR' && live?.logAvailable === true
   const showSuccessfulWarActions = completed
     && warDeployment
     && String(resourceKey).startsWith('WILDFLY_PROFILE:')
@@ -135,58 +141,10 @@ export default function OperationProgressPanel() {
   }, [profileOutput, profileId, clearProfileLogs])
 
   useEffect(() => {
-    if (!jarTerminalAvailable || !username) return undefined
-    const controller = new AbortController()
-    releasedTerminalRef.current = ''
-    setLines([])
-    setConnection('connecting')
-    setConnectionError('')
-    void fetchEventSource(terminalEventUrl(operationId), {
-      method: 'GET',
-      headers: techDriveHeaders(username),
-      signal: controller.signal,
-      openWhenHidden: true,
-      onopen: async (response) => {
-        if (!response.ok) throw new Error(`Terminal event stream returned ${response.status}`)
-        setConnection('connected')
-      },
-      onmessage: (message) => {
-        if (message.event && message.event !== 'TERMINAL_OUTPUT') return
-        try {
-          const event = JSON.parse(message.data)
-          if (deploymentIdOf(event) !== operationId || typeof event.line !== 'string') return
-          setLines((current) => [...current.slice(-999), event])
-        } catch { /* ignore malformed terminal events */ }
-      },
-      onclose: () => {
-        if (!controller.signal.aborted) throw new Error('Terminal event stream closed')
-      },
-      onerror: (error) => {
-        if (!controller.signal.aborted) {
-          setConnection('disconnected')
-          setConnectionError('Unable to connect to deployment output.')
-        }
-        throw error
-      },
-    }).catch(() => {
-      if (!controller.signal.aborted) {
-        setConnection('disconnected')
-        setConnectionError('Unable to connect to deployment output.')
-      }
-    })
-    return () => {
-      controller.abort()
-      if (releasedTerminalRef.current !== operationId) {
-        void deleteTerminal(operationId).catch(() => {})
-      }
-    }
-  }, [jarTerminalAvailable, operationId, username])
-
-  useEffect(() => {
     if (autoScroll && outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight
     }
-  }, [autoScroll, lines, profileLogLines, profileId, profileOutput])
+  }, [autoScroll, profileLogLines, profileId, profileOutput])
 
   useEffect(() => {
     if (!operationId) return undefined
@@ -209,7 +167,7 @@ export default function OperationProgressPanel() {
     try {
       saveBlob(await downloadTerminal(operationId))
     } catch (error) {
-      setActionError(error.message)
+      setActionError(error.status === 404 ? missingJarLogMessage : error.message)
     } finally {
       setActionState('')
     }
@@ -231,16 +189,7 @@ export default function OperationProgressPanel() {
       return
     }
     if (resourceType === 'JAR' && operationId) {
-      setActionState('closing')
-      try {
-        await deleteTerminal(operationId)
-        releasedTerminalRef.current = operationId
-        setViewingOperation(null)
-      } catch (error) {
-        setActionError(error.message)
-      } finally {
-        setActionState('')
-      }
+      setViewingOperation(null)
       return
     }
     setViewingOperation(null)
@@ -282,7 +231,7 @@ export default function OperationProgressPanel() {
               </span>
             )}
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-              {progress !== undefined ? `${Math.round(progress)}%` : 'In progress'}
+              {failed ? 'Failed' : cancelled ? 'Cancelled' : progress !== undefined ? `${Math.round(progress)}%` : 'In progress'}
             </span>
           </button>
           <Badge variant={badgeVariant}>{status.replace('RESOURCE_', '')}</Badge>
@@ -393,8 +342,22 @@ export default function OperationProgressPanel() {
             {live.resources.rollbackMessage && <div>{live.resources.rollbackMessage}</div>}
           </div>
         )}
-        {(showFailedWarLog || showSuccessfulWarActions) && (
+        {(showFailedWarLog || showJarLog || showSuccessfulWarActions) && (
           <div className="flex flex-wrap items-start gap-2 border-t border-border pt-3">
+            {showJarLog && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                disabled={!!actionState}
+                onClick={downloadLog}
+              >
+                {actionState === 'downloading'
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Download className="h-3.5 w-3.5" />}
+                {actionState === 'downloading' ? 'Downloading…' : 'Download full log'}
+              </Button>
+            )}
             {showFailedWarLog && (
               <Button
                 variant="outline"
@@ -443,26 +406,14 @@ export default function OperationProgressPanel() {
           <p className="text-sm text-amber-700" role="status">Profile log output is no longer available.</p>
         )}
       </CardHeader>
-      {outputVisible && <CardContent className="flex min-h-32 shrink-0 flex-col p-4 pt-0">
+      {profileOutput && <CardContent className="flex min-h-32 shrink-0 flex-col p-4 pt-0">
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="flex items-center gap-2 text-xs font-medium">
             <Terminal className="h-3.5 w-3.5" />
-            {profileOutput ? 'Profile output' : 'Command output'}
+            Profile output
             <span className="font-normal text-muted-foreground">({connection})</span>
           </span>
           <div className="flex flex-wrap gap-1">
-            {jarTerminalAvailable && (
-              <>
-                <Button variant="outline" size="sm" className="gap-2" disabled={!!actionState} onClick={downloadLog}>
-                  {actionState === 'downloading' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                  {actionState === 'downloading' ? 'Downloading…' : 'Download full log'}
-                </Button>
-                <Button variant="ghost" size="sm" className="gap-2 text-red-700" disabled={!!actionState} onClick={closeDrawer}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                  {actionState === 'closing' ? 'Closing…' : 'Close terminal'}
-                </Button>
-              </>
-            )}
             <Button variant="ghost" size="sm" className="gap-2" onClick={() => setAutoScroll((value) => !value)}>
               {autoScroll ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               {autoScroll ? 'Pause scroll' : 'Resume scroll'}

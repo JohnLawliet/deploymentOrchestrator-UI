@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { mergeActivityMap } from './PortalContext'
+import {
+  isFrontendWarningEvent,
+  jarResourceKeyForReconciliation,
+  mapFrontendProfiles,
+  mergeActivityMap,
+  mergeOperationEventRecord,
+} from './PortalContext'
 
 const profile = {
   id: 'profile-1',
@@ -41,6 +47,18 @@ describe('lifecycle activity reduction', () => {
       resourceKey: 'JAR:jar-1',
     })
     expect(attached['jar-1'].currentDeploymentId).toBe('deployment-2')
+    const replaced = mergeActivityMap(attached, {
+      eventType: 'TERMINAL_AVAILABLE',
+      resourceType: 'JAR',
+      deploymentId: 'deployment-3',
+      resourceKey: 'JAR:jar-1',
+    })
+    expect(replaced['jar-1'].currentDeploymentId).toBe('deployment-3')
+    expect(mergeActivityMap(replaced, {
+      eventType: 'RESOURCE_INACTIVE',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:jar-1',
+    })['jar-1'].currentDeploymentId).toBe('deployment-3')
     expect(mergeActivityMap(attached, {
       eventType: 'TERMINAL_CLOSED',
       resourceType: 'JAR',
@@ -117,5 +135,104 @@ describe('lifecycle activity reduction', () => {
         lastResult: 'FAILED',
       },
     })
+  })
+})
+
+describe('frontend profile system events', () => {
+  it('builds the SYSTEM_SNAPSHOT frontend cache by profile name', () => {
+    expect(mapFrontendProfiles([
+      { profileName: 'orders-ui', port: 3000 },
+      { profileName: 'payments-ui', port: 3001 },
+    ])).toEqual({
+      'orders-ui': { profileName: 'orders-ui', port: 3000 },
+      'payments-ui': { profileName: 'payments-ui', port: 3001 },
+    })
+  })
+
+  it.each(['FRONTEND_PROFILE_UNRESOLVED', 'FRONTEND_INACTIVE', 'FRONTEND_CONFIGURATION_INVALID'])(
+    'treats %s as a non-blocking frontend warning',
+    (eventType) => {
+      expect(isFrontendWarningEvent(eventType)).toBe(true)
+      expect(mergeOperationEventRecord({ statusEvent: 'DEPLOYMENT_SUCCEEDED' }, {
+        eventType,
+        deploymentId: 'deployment-1',
+        message: 'Frontend warning',
+      })).toMatchObject({
+        deploymentId: 'deployment-1',
+        statusEvent: 'DEPLOYMENT_SUCCEEDED',
+        frontendWarning: 'Frontend warning',
+      })
+    },
+  )
+
+  it('refreshes JAR data after terminal deployment and restart lifecycle events', () => {
+    expect(jarResourceKeyForReconciliation({
+      eventType: 'DEPLOYMENT_SUCCEEDED',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    })).toBe('JAR:orders')
+    expect(jarResourceKeyForReconciliation({
+      eventType: 'RESOURCE_ACTIVE',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    })).toBe('JAR:orders')
+    expect(jarResourceKeyForReconciliation({
+      eventType: 'RESOURCE_STARTING',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    })).toBeNull()
+    expect(jarResourceKeyForReconciliation({
+      eventType: 'RESOURCE_ACTIVE',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:orders',
+    })).toBeNull()
+  })
+})
+
+describe('operation terminal availability', () => {
+  it('keeps the terminal failure status and message when its JAR log becomes available', () => {
+    const failed = mergeOperationEventRecord({}, {
+      eventType: 'DEPLOYMENT_FAILED',
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      message: 'The launcher exited before startup completed.',
+    })
+    const available = mergeOperationEventRecord(failed, {
+      eventType: 'DEPLOYMENT_LOG_AVAILABLE',
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      message: 'A deployment log is available.',
+    })
+
+    expect(available).toMatchObject({
+      statusEvent: 'DEPLOYMENT_FAILED',
+      message: 'The launcher exited before startup completed.',
+      logAvailable: true,
+    })
+  })
+
+  it('changes terminal availability only from matching lifecycle events', () => {
+    const responseRecord = {
+      deploymentId: 'deployment-1',
+      terminalEventsUrl: '/api/terminals/deployment-1/events',
+    }
+    const available = mergeOperationEventRecord(responseRecord, {
+      eventType: 'TERMINAL_AVAILABLE',
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    })
+
+    expect(available.terminalAvailabilityConfirmed).toBe(true)
+    expect(mergeOperationEventRecord(available, {
+      eventType: 'OPERATION_PROGRESS',
+      deploymentId: 'deployment-1',
+    }).terminalAvailabilityConfirmed).toBe(true)
+    expect(mergeOperationEventRecord(available, {
+      eventType: 'TERMINAL_CLOSED',
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    }).terminalAvailabilityConfirmed).toBe(false)
   })
 })

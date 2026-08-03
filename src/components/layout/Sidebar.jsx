@@ -9,10 +9,12 @@ import {
     Wrench,
     UserRound,
     TableProperties,
+    Factory,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { usePortal } from '@/context/PortalContext'
 import { isOperationTerminal } from '@/lib/operationProgress'
 
@@ -38,6 +40,16 @@ const navItems = [
         label: 'Download files',
         to: 'downloads',
         icon: FolderDown,
+    },
+    {
+        label: 'Create UAT build',
+        to: 'create-uat-build',
+        icon: Factory,
+    },
+    {
+        label: 'Upload',
+        to: 'upload',
+        icon: Wrench,
     },
     {
         label: 'Tables',
@@ -101,9 +113,6 @@ export default function Sidebar() {
                         </NavLink>
                     )
                 })}
-                <div className="flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm text-muted-foreground/50 border border-transparent cursor-not-allowed" title="Deferred to a later phase">
-                    <Wrench className="w-4 h-4" /><span>Upload hotfix</span><span className="ml-auto text-[10px]">LATER</span>
-                </div>
             </nav>
 
             {/* Footer */}
@@ -111,9 +120,28 @@ export default function Sidebar() {
             <div className="px-4 py-4 space-y-3">
                 <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${systemStatus === 'connected' ? 'bg-green-400' : systemStatus === 'reconnecting' ? 'bg-amber-400 animate-pulse' : 'bg-muted-foreground'}`} /><span className="text-xs text-muted-foreground">System stream: {systemStatus}</span></div>
                 {activeOperations > 0 && <p className="text-xs text-primary">{activeOperations} operation(s) in progress</p>}
-                <div className="rounded-md border border-border p-2.5">
-                    <div className="flex items-center gap-2 min-w-0"><UserRound className="w-4 h-4 text-primary shrink-0" /><span className="text-sm truncate flex-1">{username}</span></div>
-                    <Button variant="ghost" size="sm" className="w-full mt-2 text-xs" onClick={changeUser}>Change user</Button>
+                <div className="rounded-md border border-border p-1">
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="ghost"
+                                className="h-auto w-full min-w-0 justify-start gap-2 px-2 py-1.5 font-normal"
+                            >
+                                <UserRound className="w-4 h-4 text-primary shrink-0" />
+                                <span className="text-sm truncate">{username}</span>
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                            side="right"
+                            align="end"
+                            sideOffset={8}
+                            className="z-[100] w-40 p-1"
+                        >
+                            <Button variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={changeUser}>
+                                Change user
+                            </Button>
+                        </PopoverContent>
+                    </Popover>
                 </div>
             </div>
         </aside>

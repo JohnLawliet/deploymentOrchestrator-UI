@@ -75,9 +75,16 @@ export const getProfileDatasources = (profileId, signal) => request(client.get(`
 export const getRuntimeResource = (resourceKey) => request(client.get(`/resources/${encodeURIComponent(resourceKey)}`), 'Unable to load runtime activity')
 export const getOperation = (id) => request(client.get(`/deployments/${encodeURIComponent(id)}`), 'Unable to load operation')
 export const restartJar = (app) => request(client.post(`/dashboard/jars/${encodeURIComponent(app)}/restart`, null), 'Unable to restart the application')
+export const stopJar = (app) => request(client.post(`/dashboard/jars/${encodeURIComponent(app)}/stop`, null), 'Unable to stop the application')
 export const startProfile = (id) => request(client.post(`/profiles/${encodeURIComponent(id)}/start`), 'Unable to start the profile')
 export const stopProfile = (id) => request(client.post(`/profiles/${encodeURIComponent(id)}/stop`), 'Unable to stop the profile')
 export const deployJar = (payload) => request(client.post('/deployments/qc/jar', payload), 'JAR deployment was rejected')
+export const getPortStatus = (port, applicationName, signal) => request(client.get(`/system/ports/${encodeURIComponent(port)}`, {
+  params: applicationName ? { applicationName } : {},
+  signal,
+}), 'Unable to inspect the port')
+export const getJarSnapshots = (applicationName) => request(client.get('/deployments/qc/jar/snapshots', { params: { applicationName } }), 'Unable to load JAR rollback snapshots')
+export const rollbackJar = (snapshotId) => request(client.post('/deployments/qc/jar/rollback', { snapshotId }), 'JAR rollback was rejected')
 export const preflightWar = (payload, signal) => request(client.post('/deployments/qc/war/preflight', payload, { signal }), 'WAR preflight failed')
 export const cancelWarPreflight = (profileId) => request(client.delete(`/wildfly/profiles/${encodeURIComponent(profileId)}/preflight`), 'Unable to cancel the profile reservation')
 export const deployWar = (payload) => request(client.post('/deployments/qc/war', payload), 'WAR deployment was rejected')
@@ -91,6 +98,14 @@ export const getFileRoots = () => request(client.get('/files/roots'), 'Unable to
 export const listFiles = (rootKey, path, signal) => request(client.get('/files/list', { params: { rootKey, path }, signal }), 'Unable to load this directory')
 export const downloadSingle = (rootKey, path) => blobRequest(client.get('/files/download', { params: { rootKey, path }, responseType: 'blob' }))
 export const downloadSelection = (rootKey, paths) => blobRequest(client.post('/files/download', { rootKey, paths }, { responseType: 'blob' }))
+export const deleteFiles = (rootKey, paths) => request(client.delete('/files', { data: { rootKey, paths } }), 'Unable to delete the selected items')
+export const preflightUatBuild = (payload, signal) => request(client.post('/uat-builds/preflight', payload, { signal }), 'Unable to inspect and lock the UAT build inputs')
+export const releaseUatBuildLock = (lockId) => request(client.delete(`/uat-builds/locks/${encodeURIComponent(lockId)}`), 'Unable to release the UAT build lock')
+export const convertUatBuild = (payload) => request(client.post('/uat-builds/convert', payload), 'Unable to start UAT build conversion')
+export const createUpload = (payload) => request(client.post('/uploads', payload), 'The upload was rejected')
+export const getUpload = (operationId) => request(client.get(`/uploads/${encodeURIComponent(operationId)}`), 'Unable to load the upload operation')
+export const executeUpload = (operationId, selectedTargets) => request(client.post(`/uploads/${encodeURIComponent(operationId)}/execute`, { selectedTargets }), 'The hotfix could not be started')
+export const rollbackUploadItem = (operationId, sourcePath) => request(client.post(`/uploads/${encodeURIComponent(operationId)}/rollback`, { sourcePath }), 'The item rollback could not be started')
 export const getDatabaseTables = (signal) => request(client.get('/database/tables', { signal }), 'Unable to load database table metadata')
 export const getDatabaseTableRows = (table, page, size, signal) => request(client.get(`/database/tables/${encodeURIComponent(table)}`, { params: { page, size }, signal }), 'Unable to load table data')
 
@@ -159,6 +174,17 @@ export function eventUrl(path) {
 
 export function terminalEventUrl(deploymentId) {
   return `${apiBaseUrl}/terminals/${encodeURIComponent(deploymentId)}/events`
+}
+
+export function resolvedTerminalEventUrl(suppliedPath, deploymentId) {
+  const path = String(suppliedPath || '').trim()
+  if (path.startsWith('/api/')) return `${backendOrigin}${contextPath}${path}`
+  if (path.startsWith(`${contextPath}/api/`)) return `${backendOrigin}${path}`
+  return terminalEventUrl(deploymentId)
+}
+
+export function uatBuildOperationEventUrl(operationId) {
+  return `${apiBaseUrl}/uat-builds/operations/${encodeURIComponent(operationId)}`
 }
 
 export function saveBlob({ blob, filename }) {

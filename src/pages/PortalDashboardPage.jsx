@@ -1,31 +1,33 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import {
-  Check,
   ChevronDown,
   ChevronUp,
-  ChevronsUpDown,
   Eye,
   Loader2,
   Power,
   RefreshCw,
   RotateCcw,
   Server,
-  X,
 } from "lucide-react";
 import {
   getJars,
   getProfiles,
   isLockConflict,
   restartJar,
+  stopJar,
   startProfile,
   stopProfile,
 } from "@/lib/contractApi";
 import {
   normalizeDashboardProfile,
+  normalizeRuntimeActivity,
   overlayRuntimeActivity,
 } from "@/lib/runtimeActivity";
 import { usePortal } from "@/context/PortalContext";
+import JarFrontendDetails from "@/components/JarFrontendDetails";
+import JarRollbackButton from "@/components/JarRollbackButton";
 import RollbackButton from "@/components/RollbackButton";
+import SearchableProfileSelect from "@/components/SearchableProfileSelect";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -36,22 +38,23 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Notice, Page } from "@/components/PagePrimitives";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from "@/components/ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 
 const busyStates = new Set(["STARTING", "STOPPING", "DEPLOYING"]);
+const readinessLabels = {
+  HTTP_VERIFIED: "Verified healthy",
+  PORT_VERIFIED: "Healthy — process and port verified",
+};
+
+export function shouldRefreshDashboardActivity(event) {
+  return event?.eventType === "RESOURCE_ACTIVE"
+    || event?.eventType === "RESOURCE_FAILED"
+    || event?.eventType === "DEPLOYMENT_SUCCEEDED"
+    || event?.eventType === "DEPLOYMENT_FAILED"
+    || (
+      event?.eventType === "OPERATION_PROGRESS"
+      && ["COMPLETED", "FAILED"].includes(event?.resources?.status)
+    );
+}
 
 export default function PortalDashboardPage() {
   const {
@@ -62,6 +65,7 @@ export default function PortalDashboardPage() {
     registerOperation,
     setViewingOperation,
     operations,
+    lastSystemEvent,
   } = usePortal();
   const [jars, setJars] = useState([]);
   const [profiles, setProfiles] = useState([]);
@@ -106,7 +110,14 @@ export default function PortalDashboardPage() {
     Promise.all([getJars(), getProfiles()])
       .then(([jarItems, profileItems]) => {
         if (disposed) return;
-        const nextJars = Array.isArray(jarItems) ? jarItems : [];
+        const nextJars = (Array.isArray(jarItems) ? jarItems : [])
+          .map((jar) => {
+            const activity = normalizeRuntimeActivity({ ...jar, resourceType: "JAR" });
+            return activity?.id && activity.applicationName
+              ? { ...jar, ...activity }
+              : null;
+          })
+          .filter(Boolean);
         const nextProfiles = Array.isArray(profileItems) ? profileItems : [];
         setJars(nextJars);
         setProfiles(nextProfiles);
@@ -134,6 +145,12 @@ export default function PortalDashboardPage() {
     };
   }, [refresh, reconcileResourceActivity, replaceProfileActivities]);
 
+  useEffect(() => {
+    if (shouldRefreshDashboardActivity(lastSystemEvent)) {
+      setRefresh((current) => current + 1);
+    }
+  }, [lastSystemEvent]);
+
   const runRestart = async (key, action, label, warning) => {
     if (!window.confirm(warning)) return;
     setSubmitting(key);
@@ -153,7 +170,10 @@ export default function PortalDashboardPage() {
     const resolvedResourceType = resourceType
       || ("applicationName" in activity ? "JAR" : "WILDFLY_PROFILE");
     const deploymentId = activity?.currentDeploymentId;
-    if (resolvedResourceType === "JAR" && !deploymentId) return;
+    if (
+      resolvedResourceType === "JAR"
+      && (!deploymentId || operations[deploymentId]?.terminalAvailabilityConfirmed !== true)
+    ) return;
     if (resolvedResourceType === "WILDFLY_PROFILE" && !activity?.serverLogAvailable) return;
     const resourceKey = `${resolvedResourceType}:${activity.id}`;
     setViewingOperation(
@@ -250,8 +270,9 @@ export default function PortalDashboardPage() {
                     <option key={item}>{item}</option>
                   ))}
                 </select>
-                <ProfileAutocomplete
+                <SearchableProfileSelect
                   profiles={versionProfiles}
+                  align="end"
                   value={profileQuery}
                   onValueChange={changeProfileQuery}
                   onSelect={selectProfile}
@@ -343,37 +364,39 @@ export default function PortalDashboardPage() {
             </p>
             <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
               {jars.map((jar) => {
-                const activity = jarProfileActivityMap[jar.id] ||
-                  Object.values(jarProfileActivityMap).find(
-                    (item) =>
-                      item.applicationName ===
-                      (jar.applicationName || jar.name),
-                  ) || {
-                    id: jar.id,
-                    applicationName: jar.applicationName || jar.name,
-                    status: "UNKNOWN",
-                    health: "UNKNOWN",
-                  };
-                const key = `JAR:${activity.id || jar.id}`;
+                const initialActivity = {
+                  ...jar,
+                  status: jar.status || "UNKNOWN",
+                  health: jar.health || "UNKNOWN",
+                };
+                const liveActivity = jarProfileActivityMap[jar.id];
+                const activity = overlayRuntimeActivity(initialActivity, liveActivity);
+                const key = `JAR:${jar.id}`;
                 return (
                   <ActivityCard
-                    key={jar.id || jar.name}
+                    key={jar.id}
                     activity={activity}
-                    title={activity.applicationName || jar.name}
-                    subtitle={activity.jarName || jar.jarName}
+                    title={activity.applicationName}
+                    subtitle={activity.jarName}
                     lastDeployedUser={jar.lastDeployedUser}
                   >
+                    <JarFrontendDetails activity={activity} />
                     <Button
                       variant="outline"
                       size="sm"
                       className="gap-2"
-                      disabled={!activity.currentDeploymentId}
+                      disabled={activity.status !== "ACTIVE" || submitting === key || busyStates.has(activity.status)}
                       onClick={() =>
-                        viewOutput(activity, `JAR · ${jar.name}`)
+                        runRestart(
+                          key,
+                          () => stopJar(activity.applicationName),
+                          `Stop JAR · ${activity.applicationName}`,
+                          `Stop ${activity.applicationName}? Its managed Java process and log capture will be closed.`,
+                        )
                       }
                     >
-                      <Eye className="w-3.5 h-3.5" />
-                      View output
+                      <Power className="w-3.5 h-3.5" />
+                      Stop
                     </Button>
                     <Button
                       size="sm"
@@ -384,16 +407,20 @@ export default function PortalDashboardPage() {
                       onClick={() =>
                         runRestart(
                           key,
-                          () =>
-                            restartJar(jar.applicationName || jar.name),
-                          `Restart JAR · ${jar.name}`,
-                          `Restart ${jar.name}? The running process will be stopped and started again.`,
+                          () => restartJar(activity.applicationName),
+                          `Restart JAR · ${activity.applicationName}`,
+                          `Restart ${activity.applicationName}? The running process will be stopped and started again.`,
                         )
                       }
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                       Restart
                     </Button>
+                    <JarRollbackButton
+                      resourceId={jar.id}
+                      applicationName={activity.applicationName}
+                      disabled={submitting === key || busyStates.has(activity.status)}
+                    />
                   </ActivityCard>
                 );
               })}
@@ -407,102 +434,6 @@ export default function PortalDashboardPage() {
         </div>
       )}
     </Page>
-  );
-}
-
-function ProfileAutocomplete({
-  profiles,
-  value,
-  onValueChange,
-  onSelect,
-}) {
-  const [open, setOpen] = useState(false);
-  const normalizedQuery = value.trim().toLocaleLowerCase();
-  const suggestions = useMemo(() => {
-    if (!normalizedQuery) return profiles;
-    return profiles.filter((profile) =>
-      [profile.name, profile.id].some((candidate) =>
-        String(candidate || "")
-          .toLocaleLowerCase()
-          .includes(normalizedQuery),
-      ),
-    );
-  }, [normalizedQuery, profiles]);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-label="Search WildFly profiles"
-          className="w-full justify-between font-normal sm:w-72"
-        >
-          <span className={value ? "truncate" : "truncate text-muted-foreground"}>
-            {value || "Search profiles..."}
-          </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="w-[var(--radix-popover-trigger-width)] p-0"
-      >
-        <Command shouldFilter={false}>
-          <CommandInput
-            aria-label="Profile name or ID"
-            placeholder="Type a profile name or ID..."
-            value={value}
-            onValueChange={onValueChange}
-          />
-          <CommandList>
-            <CommandEmpty>No matching profiles.</CommandEmpty>
-            {value && (
-              <>
-                <CommandGroup>
-                  <CommandItem
-                    value="clear-profile-search"
-                    onSelect={() => {
-                      onValueChange("");
-                      setOpen(false);
-                    }}
-                  >
-                    <X className="mr-2 h-4 w-4" />
-                    Show all profiles
-                  </CommandItem>
-                </CommandGroup>
-                <CommandSeparator />
-              </>
-            )}
-            <CommandGroup heading="Profiles">
-              {suggestions.map((profile) => (
-                <CommandItem
-                  key={profile.id}
-                  value={`${profile.name} ${profile.id}`}
-                  onSelect={() => {
-                    onSelect(profile);
-                    setOpen(false);
-                  }}
-                >
-                  <Check
-                    className={`mr-2 h-4 w-4 ${
-                      value === profile.name ? "opacity-100" : "opacity-0"
-                    }`}
-                  />
-                  <span className="min-w-0">
-                    <span className="block truncate">{profile.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {profile.id}
-                    </span>
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
   );
 }
 
@@ -607,6 +538,16 @@ function ActivityCard({
               ` · ${activity.consecutiveFailures || 0} consecutive failures`}
           </Notice>
         )}
+        {!wildfly && readinessLabels[activity.readinessStatus] && (
+          <p className="text-sm font-medium text-green-700" role="status">
+            {readinessLabels[activity.readinessStatus]}
+          </p>
+        )}
+        {!wildfly && activity.readinessReason && (
+          <p className="text-xs text-muted-foreground">
+            Readiness diagnostic: {activity.readinessReason}
+          </p>
+        )}
         {lastDeployedUser && (
           <p className="text-xs text-muted-foreground">
             Last deployed by{" "}
@@ -617,8 +558,14 @@ function ActivityCard({
         )}
         <div id={detailsId} hidden={!expanded}>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <dt className="text-muted-foreground">PID</dt>
+            <dt className="text-muted-foreground">{wildfly ? "PID" : "Java PID"}</dt>
             <dd>{activity.pid ?? "Unavailable"}</dd>
+            {!wildfly && (
+              <>
+                <dt className="text-muted-foreground">Application port</dt>
+                <dd>{activity.applicationPort ?? "—"}</dd>
+              </>
+            )}
             {wildfly && (
               <>
                 <dt className="text-muted-foreground">Application</dt>

@@ -1,27 +1,22 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const stream = vi.hoisted(() => ({ options: null }))
 const api = vi.hoisted(() => ({
-  deleteTerminal: vi.fn(),
   downloadTerminal: vi.fn(),
   getOperation: vi.fn(),
   saveBlob: vi.fn(),
   stopProfile: vi.fn(),
   subscribeProfileLogs: vi.fn(),
-  techDriveHeaders: vi.fn((username) => ({ 'X-TechDrive-Username': username })),
-  terminalEventUrl: vi.fn((deploymentId) => `/api/terminals/${deploymentId}/events`),
   unsubscribeProfileLogs: vi.fn(),
 }))
 const portal = vi.hoisted(() => ({
   clearProfileLogs: vi.fn(),
-  jarProfileActivityMap: {},
   operations: {},
   profileLogLines: {},
   reconcileResourceActivity: vi.fn(),
   setViewingOperation: vi.fn(),
-  username: 'deploy-user',
   viewingOperation: null,
 }))
 
@@ -45,10 +40,8 @@ describe('OperationProgressPanel revised output contracts', () => {
     api.getOperation.mockResolvedValue({})
     api.subscribeProfileLogs.mockResolvedValue({})
     api.unsubscribeProfileLogs.mockResolvedValue({})
-    api.deleteTerminal.mockResolvedValue({})
     api.downloadTerminal.mockResolvedValue({ blob: new Blob(['log']), filename: 'deployment.log' })
     portal.clearProfileLogs.mockReset()
-    portal.jarProfileActivityMap = {}
     portal.operations = {}
     portal.profileLogLines = {}
     portal.setViewingOperation.mockReset()
@@ -103,33 +96,143 @@ describe('OperationProgressPanel revised output contracts', () => {
     expect(api.unsubscribeProfileLogs).toHaveBeenCalledTimes(1)
   })
 
-  it('attaches JAR terminal output with the canonical header-authenticated stream', async () => {
+  it('never renders or connects to JAR command output and exposes an event-confirmed log', () => {
     portal.viewingOperation = {
       deploymentId: 'deployment-1',
       resourceType: 'JAR',
       resourceKey: 'JAR:orders',
     }
-    portal.jarProfileActivityMap = {
-      orders: { id: 'orders', currentDeploymentId: 'deployment-1' },
+    portal.operations = {
+      'deployment-1': {
+        deploymentId: 'deployment-1',
+        terminalAvailabilityConfirmed: true,
+        logAvailable: true,
+        progress: {
+          status: 'COMPLETED',
+          phaseCode: 'RESTARTING',
+          progressPercentage: 80,
+          message: 'Deployment completed.',
+        },
+      },
+    }
+    render(<OperationProgressPanel />)
+
+    expect(screen.queryByText('Command output')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download full log' })).toBeVisible()
+    expect(screen.getByText('100%')).toBeInTheDocument()
+    expect(screen.queryByText('80%')).not.toBeInTheDocument()
+    expect(screen.queryByText('Phase:')).not.toBeInTheDocument()
+    expect(stream.options).toBeNull()
+  })
+
+  it('waits for DEPLOYMENT_LOG_AVAILABLE before showing a completed JAR download', () => {
+    portal.viewingOperation = {
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    }
+    portal.operations = {
+      'deployment-1': {
+        deploymentId: 'deployment-1',
+        terminalAvailabilityConfirmed: true,
+        progress: {
+          status: 'COMPLETED',
+          phaseCode: 'COMPLETE',
+          progressPercentage: 100,
+          message: 'Deployment completed.',
+        },
+      },
+    }
+
+    render(<OperationProgressPanel />)
+
+    expect(screen.queryByRole('button', { name: 'Download full log' })).not.toBeInTheDocument()
+  })
+
+  it('replaces stale progress with a backend lifecycle failure and exposes an available log', async () => {
+    portal.viewingOperation = {
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    }
+    portal.operations = {
+      'deployment-1': {
+        deploymentId: 'deployment-1',
+        statusEvent: 'DEPLOYMENT_FAILED',
+        message: 'The application did not become healthy before the deadline.',
+        logAvailable: true,
+        progress: {
+          status: 'RESTARTING',
+          phaseCode: 'RESTARTING',
+          progressPercentage: 80,
+          message: 'Restarting application',
+        },
+      },
     }
     const user = userEvent.setup()
     render(<OperationProgressPanel />)
 
-    expect(api.terminalEventUrl).toHaveBeenCalledWith('deployment-1')
-    expect(api.techDriveHeaders).toHaveBeenCalledWith('deploy-user')
-    expect(stream.options.headers).toEqual({ 'X-TechDrive-Username': 'deploy-user' })
-
-    act(() => stream.options.onmessage({
-      event: 'TERMINAL_OUTPUT',
-      data: JSON.stringify({ deploymentId: 'deployment-1', line: 'JAR output' }),
-    }))
-    expect(await screen.findByText('JAR output')).toBeInTheDocument()
+    expect(screen.getByText('FAILED')).toBeInTheDocument()
+    expect(screen.getByText('The application did not become healthy before the deadline.')).toBeInTheDocument()
+    expect(screen.queryByText('80%')).not.toBeInTheDocument()
+    expect(screen.queryByText('Phase:')).not.toBeInTheDocument()
+    expect(screen.queryByText('Command output')).not.toBeInTheDocument()
+    expect(stream.options).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Download full log' }))
     expect(api.downloadTerminal).toHaveBeenCalledWith('deployment-1')
+    expect(api.saveBlob).toHaveBeenCalledWith(expect.objectContaining({ filename: 'deployment.log' }))
+  })
 
-    await user.click(screen.getByRole('button', { name: 'Close terminal' }))
-    expect(api.deleteTerminal).toHaveBeenCalledWith('deployment-1')
+  it('waits for DEPLOYMENT_LOG_AVAILABLE before showing a failed JAR download', () => {
+    portal.viewingOperation = {
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    }
+    portal.operations = {
+      'deployment-1': {
+        deploymentId: 'deployment-1',
+        progress: {
+          status: 'FAILED',
+          phaseCode: 'RESTARTING',
+          progressPercentage: 80,
+          message: 'Launcher failed.',
+        },
+      },
+    }
+
+    render(<OperationProgressPanel />)
+
+    expect(screen.getByText('Launcher failed.')).toBeInTheDocument()
+    expect(screen.queryByText('80%')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Download full log' })).not.toBeInTheDocument()
+  })
+
+  it('shows the launcher-specific message when a JAR log download returns 404', async () => {
+    api.downloadTerminal.mockRejectedValueOnce(Object.assign(new Error('Request failed with status code 404'), { status: 404 }))
+    portal.viewingOperation = {
+      deploymentId: 'deployment-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+    }
+    portal.operations = {
+      'deployment-1': {
+        deploymentId: 'deployment-1',
+        logAvailable: true,
+        progress: { status: 'FAILED', message: 'Launcher failed.' },
+      },
+    }
+    const user = userEvent.setup()
+    render(<OperationProgressPanel />)
+
+    await user.click(screen.getByRole('button', { name: 'Download full log' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No jarDeployment.log was produced because the application launcher did not start.',
+    )
+    expect(screen.queryByText(/status code 404/i)).not.toBeInTheDocument()
+    expect(api.saveBlob).not.toHaveBeenCalled()
   })
 
   it('continues rendering operation progress steps without opening a WildFly terminal stream', () => {

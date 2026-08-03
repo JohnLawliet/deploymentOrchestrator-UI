@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   normalizeDashboardProfile,
+  normalizeFrontendProfile,
   normalizeRuntimeActivity,
   normalizeSystemSnapshot,
   overlayRuntimeActivity,
@@ -46,6 +47,100 @@ describe('normalizeRuntimeActivity', () => {
       lastUpdatedOn: '2026-07-26T13:24:11Z',
       lastResult: 'SUCCESS',
       currentDeploymentId: 'operation-2',
+    })
+  })
+
+  it('maps associated and unassociated JAR frontend data without inferring a profile', () => {
+    expect(normalizeRuntimeActivity({
+      resourceKey: 'JAR:orders',
+      resourceType: 'JAR',
+      applicationName: 'Orders',
+      readinessStatus: 'HTTP_VERIFIED',
+      readinessReason: 'Actuator endpoint returned 200.',
+      frontendUrl: 'https://fallback.example/orders',
+      frontendContextPath: '/orders',
+      frontendProfile: {
+        profileName: 'orders-ui',
+        port: 443,
+        documentRoot: '/srv/www/orders',
+        serverName: 'orders.example',
+        frontendUrl: 'https://orders.example',
+        directoryExists: true,
+        running: false,
+      },
+    })).toMatchObject({
+      id: 'orders',
+      readinessStatus: 'HTTP_VERIFIED',
+      readinessReason: 'Actuator endpoint returned 200.',
+      frontendUrl: 'https://fallback.example/orders',
+      frontendContextPath: '/orders',
+      frontendProfile: {
+        profileName: 'orders-ui',
+        port: 443,
+        documentRoot: '/srv/www/orders',
+        serverName: 'orders.example',
+        frontendUrl: 'https://orders.example',
+        directoryExists: true,
+        running: false,
+      },
+    })
+
+    expect(normalizeRuntimeActivity({
+      resourceKey: 'JAR:ambiguous',
+      resourceType: 'JAR',
+      applicationName: 'Ambiguous',
+      frontendUrl: 'https://ambiguous.example',
+      frontendContextPath: '/ambiguous',
+      frontendProfile: null,
+    })).toMatchObject({
+      id: 'ambiguous',
+      frontendUrl: 'https://ambiguous.example',
+      frontendContextPath: '/ambiguous',
+      frontendProfile: null,
+    })
+  })
+
+  it('keeps failed dashboard JAR catalogue entries visible by their backend id', () => {
+    expect(normalizeRuntimeActivity({
+      id: '4fe7a947-883f-484e-8108-ee9d3c354393',
+      resourceType: 'JAR',
+      name: 'testProject',
+      applicationName: 'testProject',
+      jarName: 'testProject.jar',
+      status: 'FAILED',
+      health: 'FUNCTIONAL',
+      readiness: 'NOT_VERIFIED',
+      lastResult: 'Health verification failed',
+    })).toMatchObject({
+      id: '4fe7a947-883f-484e-8108-ee9d3c354393',
+      applicationName: 'testProject',
+      jarName: 'testProject.jar',
+      status: 'FAILED',
+      health: 'FUNCTIONAL',
+      readinessStatus: 'NOT_VERIFIED',
+      lastResult: 'Health verification failed',
+    })
+  })
+})
+
+describe('normalizeFrontendProfile', () => {
+  it('preserves the complete frontend profile contract', () => {
+    expect(normalizeFrontendProfile({
+      profileName: 'orders-ui',
+      port: 3000,
+      documentRoot: '/srv/www/orders',
+      serverName: 'orders.example',
+      frontendUrl: 'https://orders.example',
+      directoryExists: false,
+      running: true,
+    })).toEqual({
+      profileName: 'orders-ui',
+      port: 3000,
+      documentRoot: '/srv/www/orders',
+      serverName: 'orders.example',
+      frontendUrl: 'https://orders.example',
+      directoryExists: false,
+      running: true,
     })
   })
 })
@@ -144,6 +239,16 @@ describe('normalizeSystemSnapshot', () => {
         applicationName: 'orders',
         status: 'ACTIVE',
         currentDeploymentId: 'deployment-2',
+        frontendProfile: null,
+      }],
+      frontendProfiles: [{
+        profileName: 'orders-ui',
+        port: 3000,
+        documentRoot: '/srv/www/orders',
+        serverName: 'orders.example',
+        frontendUrl: 'https://orders.example',
+        directoryExists: true,
+        running: true,
       }],
     })).toMatchObject({
       wildflyProfiles: [{
@@ -159,6 +264,16 @@ describe('normalizeSystemSnapshot', () => {
         applicationName: 'orders',
         status: 'ACTIVE',
         currentDeploymentId: 'deployment-2',
+        frontendProfile: null,
+      }],
+      frontendProfiles: [{
+        profileName: 'orders-ui',
+        port: 3000,
+        documentRoot: '/srv/www/orders',
+        serverName: 'orders.example',
+        frontendUrl: 'https://orders.example',
+        directoryExists: true,
+        running: true,
       }],
     })
   })

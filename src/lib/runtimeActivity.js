@@ -7,6 +7,19 @@ const definedFields = (fields) => Object.fromEntries(
   Object.entries(fields).filter(([, value]) => value !== undefined),
 )
 
+export function normalizeFrontendProfile(profile) {
+  if (!profile?.profileName) return null
+  return definedFields({
+    profileName: profile.profileName,
+    port: profile.port,
+    documentRoot: profile.documentRoot,
+    serverName: profile.serverName,
+    frontendUrl: profile.frontendUrl,
+    directoryExists: profile.directoryExists,
+    running: profile.running,
+  })
+}
+
 export function normalizeDashboardProfile(profile) {
   if (!profile?.id) return null
   const failedDeployCount = Number(profile.failedDeployCount)
@@ -48,14 +61,23 @@ export function overlayRuntimeActivity(initialActivity, liveActivity) {
 export function normalizeRuntimeActivity(resource) {
   if (!resource || !resourceId(resource)) return null
   const jar = resource.resourceType === 'JAR' || 'applicationName' in resource
+  const frontendProfile = resource.frontendProfile === null
+    ? null
+    : resource.frontendProfile === undefined
+      ? undefined
+      : normalizeFrontendProfile(resource.frontendProfile)
   return definedFields({
     id: resourceId(resource),
     ...(jar
       ? {
-          applicationName: resource.applicationName || resource.application || resource.displayName,
-          jarName: resource.jarName || resource.displayName,
+          applicationName: resource.applicationName ?? resource.application,
+          jarName: resource.jarName,
+          applicationPort: resource.applicationPort,
+          readinessStatus: resource.readinessStatus ?? resource.readiness,
+          readinessReason: resource.readinessReason,
           frontendUrl: resource.frontendUrl,
           frontendContextPath: resource.frontendContextPath,
+          frontendProfile,
         }
       : {
           profileName: resource.profileName || resource.displayName,
@@ -94,5 +116,8 @@ export function normalizeSystemSnapshot(resources) {
   const jarProfiles = (Array.isArray(resources?.jarProfiles) ? resources.jarProfiles : [])
     .map(normalizeRuntimeActivity)
     .filter(Boolean)
-  return { wildflyProfiles, jarProfiles }
+  const frontendProfiles = (Array.isArray(resources?.frontendProfiles) ? resources.frontendProfiles : [])
+    .map(normalizeFrontendProfile)
+    .filter(Boolean)
+  return { wildflyProfiles, jarProfiles, frontendProfiles }
 }
