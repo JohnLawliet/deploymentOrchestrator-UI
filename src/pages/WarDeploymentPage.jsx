@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertCircle,
-  CheckCircle2,
-  Loader2,
-  Rocket,
-} from "lucide-react";
-import FileBrowser from "@/components/FileBrowser";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, CheckCircle2, Loader2, Rocket } from 'lucide-react';
+import FileBrowser from '@/components/FileBrowser';
+import LockNotice from '@/components/LockNotice';
 import {
   cancelWarPreflight,
   deployWar,
@@ -14,56 +10,25 @@ import {
   getWarApplications,
   isLockConflict,
   preflightWar,
-} from "@/lib/contractApi";
-import { deploymentIdOf } from "@/lib/deploymentIdentity";
-import { usePortal } from "@/context/PortalContext";
-import { useWarDeployStore } from "@/warDeployStore";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  FormDescription,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Notice, Page } from "@/components/PagePrimitives";
+} from '@/lib/contractApi';
+import { deploymentIdOf } from '@/lib/deploymentIdentity';
+import { usePortal } from '@/context/PortalContext';
+import { useWarDeployStore } from '@/warDeployStore';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { FormDescription, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Notice, Page } from '@/components/PagePrimitives';
 
-const datasourceFields = [
-  "name",
-  "jndiName",
-  "connectionUrl",
-  "username",
-  "password",
-  "enabled",
-];
+const datasourceFields = ['name', 'jndiName', 'connectionUrl', 'username', 'password', 'enabled'];
 const normalizeDatasource = (value) =>
   value
-    ? Object.fromEntries(
-        datasourceFields.map((field) => [
-          field,
-          field === "enabled" ? !!value[field] : (value[field] ?? ""),
-        ]),
-      )
+    ? Object.fromEntries(datasourceFields.map((field) => [field, field === 'enabled' ? !!value[field] : (value[field] ?? '')]))
     : null;
-const sameDatasource = (left, right) =>
-  JSON.stringify(normalizeDatasource(left)) ===
-  JSON.stringify(normalizeDatasource(right));
+const sameDatasource = (left, right) => JSON.stringify(normalizeDatasource(left)) === JSON.stringify(normalizeDatasource(right));
 export default function WarDeploymentPage() {
   const {
     username,
@@ -71,6 +36,9 @@ export default function WarDeploymentPage() {
     mergeActivity,
     reconcileProfileActivity,
     registerOperation,
+    findConflictingLock,
+    lastSystemEvent,
+    snapshotRevision,
   } = usePortal();
   const currentStore = useWarDeployStore();
   const store = useRef(currentStore).current;
@@ -99,40 +67,32 @@ export default function WarDeploymentPage() {
     submitting,
   } = currentStore;
   const [now, setNow] = useState(Date.now());
-  const [pendingOperationId, setPendingOperationId] = useState("");
+  const [pendingOperationId, setPendingOperationId] = useState('');
+  const pendingSnapshotRevision = useRef(0);
   const submissionGuard = useRef(false);
-  const reservedProfile = useRef("");
+  const reservedProfile = useRef('');
 
-  const versions = useMemo(
-    () => [...new Set(profiles.map((item) => item.version).filter(Boolean))],
-    [profiles],
-  );
+  const versions = useMemo(() => [...new Set(profiles.map((item) => item.version).filter(Boolean))], [profiles]);
 
-  const filteredProfiles = useMemo(
-    () => profiles.filter((item) => item.version === version),
-    [profiles, version],
-  );
-  const selectedProfile = useMemo(
-    () => profiles.find((item) => item.id === profileId),
-    [profileId, profiles],
-  );
+  const filteredProfiles = useMemo(() => profiles.filter((item) => item.version === version), [profiles, version]);
+  const selectedProfile = useMemo(() => profiles.find((item) => item.id === profileId), [profileId, profiles]);
   const requiredValid = !!(application && version && profileId && source[0]);
   const selectedActivity = wildflyProfileActivityMap[profileId];
-  const profileBusy = ["STARTING", "STOPPING", "DEPLOYING"].includes(
-    selectedActivity?.status,
-  );
-  const lockTime = preflight?.lockExpiresAt
-    ? new Date(preflight.lockExpiresAt).getTime()
-    : 0;
+  const profileBusy = ['STARTING', 'STOPPING', 'DEPLOYING'].includes(selectedActivity?.status);
+  const profileLock = findConflictingLock?.({
+    resourceKey: `profile:${profileId}`,
+    section: 'WAR',
+    profile: selectedProfile?.name,
+    mode: 'WRITE',
+  });
+  const lockTime = preflight?.lockExpiresAt ? new Date(preflight.lockExpiresAt).getTime() : 0;
   const remainingMs = lockTime ? Math.max(0, lockTime - now) : 0;
   const remainingSeconds = Math.ceil(remainingMs / 1000);
   const expired = !!lockTime && remainingMs <= 0;
   const duplicates = Object.entries(preflight?.duplicateFiles || {});
-  const allDuplicatesSelected = duplicates.every(([name, candidates]) =>
-    candidates.includes(duplicateSelections[name]),
-  );
+  const allDuplicatesSelected = duplicates.every(([name, candidates]) => candidates.includes(duplicateSelections[name]));
   const canDeploy =
-    preflightState === "ready" &&
+    preflightState === 'ready' &&
     requiredValid &&
     lockTime > 0 &&
     !preflight?.missingFiles?.length &&
@@ -140,75 +100,79 @@ export default function WarDeploymentPage() {
     !expired &&
     !submitting &&
     !pendingOperationId &&
-    !profileBusy;
+    !profileBusy &&
+    !profileLock;
 
   useEffect(() => {
-    store.setApplicationState("loading");
-    store.setApplicationError("");
+    const event = lastSystemEvent;
+    if (
+      event?.eventType !== 'OPERATION_FINISHED' ||
+      (event.resources?.section !== 'WAR' && event.resources?.resourceType !== 'WILDFLY_PROFILE')
+    )
+      return;
+    const affected = String(event.resources?.resourceKey || event.resourceKey || '').replace(/^WILDFLY_PROFILE:/, '');
+    if (affected !== profileId) return;
+    getProfiles()
+      .then((items) => store.setProfiles(Array.isArray(items) ? items : []))
+      .catch(() => {});
+  }, [lastSystemEvent, profileId, store]);
+
+  useEffect(() => {
+    store.setApplicationState('loading');
+    store.setApplicationError('');
     getWarApplications()
       .then((items) => {
-        const next = (Array.isArray(items) ? items : []).filter((item) =>
-          item.environments?.includes("qc"),
-        );
+        const next = (Array.isArray(items) ? items : []).filter((item) => item.environments?.includes('qc'));
         store.setApplications(next);
-        store.setApplication(
-          (current) => current || next[0]?.application || "",
-        );
-        store.setApplicationState("ready");
+        store.setApplication((current) => current || next[0]?.application || '');
+        store.setApplicationState('ready');
       })
       .catch((reason) => {
         store.setApplicationError(reason.message);
-        store.setApplicationState("error");
+        store.setApplicationState('error');
       });
-    store.setProfileState("loading");
-    store.setProfileError("");
+    store.setProfileState('loading');
+    store.setProfileError('');
     getProfiles()
       .then((items) => {
         const next = Array.isArray(items) ? items : [];
         store.setProfiles(next);
-        store.setVersion(
-          (current) =>
-            current || next.find((item) => item.version)?.version || "",
-        );
-        store.setProfileState("ready");
+        store.setVersion((current) => current || next.find((item) => item.version)?.version || '');
+        store.setProfileState('ready');
       })
       .catch((reason) => {
         store.setProfileError(reason.message);
-        store.setProfileState("error");
+        store.setProfileState('error');
       });
   }, [store]);
 
   useEffect(() => {
     if (!filteredProfiles.length) return;
-    store.setProfileId((current) =>
-      filteredProfiles.some((item) => item.id === current)
-        ? current
-        : filteredProfiles[0].id,
-    );
+    store.setProfileId((current) => (filteredProfiles.some((item) => item.id === current) ? current : filteredProfiles[0].id));
   }, [filteredProfiles, store]);
 
   useEffect(() => {
     store.setDatasource(null);
     store.setOriginalDatasource(null);
-    store.setDatasourceError("");
+    store.setDatasourceError('');
     if (!profileId) {
-      store.setDatasourceState("idle");
+      store.setDatasourceState('idle');
       return undefined;
     }
     reconcileProfileActivity(profileId).catch(() => {});
-    store.setDatasourceState("loading");
+    store.setDatasourceState('loading');
     const controller = new AbortController();
     getProfileDatasources(profileId, controller.signal)
       .then((result) => {
         const next = normalizeDatasource(result);
         store.setDatasource(next);
         store.setOriginalDatasource(next ? { ...next } : null);
-        store.setDatasourceState("ready");
+        store.setDatasourceState('ready');
       })
       .catch((reason) => {
-        if (reason.name !== "CanceledError") {
+        if (reason.name !== 'CanceledError') {
           store.setDatasourceError(reason.message);
-          store.setDatasourceState("error");
+          store.setDatasourceState('error');
         }
       });
     return () => controller.abort();
@@ -217,10 +181,10 @@ export default function WarDeploymentPage() {
   useEffect(() => {
     if (
       pendingOperationId &&
-      selectedActivity?.currentDeploymentId === pendingOperationId
+      (selectedActivity?.activeOperationId === pendingOperationId || snapshotRevision > pendingSnapshotRevision.current)
     )
-      setPendingOperationId("");
-  }, [pendingOperationId, selectedActivity?.currentDeploymentId]);
+      setPendingOperationId('');
+  }, [pendingOperationId, selectedActivity?.activeOperationId, snapshotRevision]);
 
   useEffect(() => {
     if (!lockTime || expired) return undefined;
@@ -231,15 +195,15 @@ export default function WarDeploymentPage() {
   useEffect(() => {
     if (!expired || !preflightChecked) return;
     store.setPreflightChecked(false);
-    store.setPreflightState("expired");
+    store.setPreflightState('expired');
   }, [expired, preflightChecked, store]);
 
   const clearLocalPreflight = useCallback(() => {
     store.setPreflight(null);
     store.setDuplicateSelections({});
     store.setPreflightChecked(false);
-    store.setPreflightState("idle");
-    reservedProfile.current = "";
+    store.setPreflightState('idle');
+    reservedProfile.current = '';
   }, [store]);
 
   const cancelReservation = useCallback(
@@ -248,7 +212,7 @@ export default function WarDeploymentPage() {
       if (!profile) return;
       try {
         await cancelWarPreflight(profile);
-        store.setCancellationWarning("");
+        store.setCancellationWarning('');
       } catch (reason) {
         store.setCancellationWarning(
           `The reservation could not be cancelled: ${reason.message}. It will still expire on the server.`,
@@ -261,7 +225,7 @@ export default function WarDeploymentPage() {
   useEffect(
     () => () => {
       const profile = reservedProfile.current;
-      reservedProfile.current = "";
+      reservedProfile.current = '';
       if (profile) cancelWarPreflight(profile).catch(() => {});
     },
     [],
@@ -271,7 +235,7 @@ export default function WarDeploymentPage() {
     if (reservedProfile.current) cancelReservation();
     else clearLocalPreflight();
     setter(value);
-    store.setError("");
+    store.setError('');
   };
 
   const payload = useMemo(
@@ -279,50 +243,33 @@ export default function WarDeploymentPage() {
       application,
       deployerName: username,
       profileId,
-      sourceRootKey: "techDrive",
-      sourcePath: source[0] || "",
-      datasourceOverride: sameDatasource(datasource, originalDatasource)
-        ? null
-        : normalizeDatasource(datasource),
+      sourceRootKey: 'techDrive',
+      sourcePath: source[0] || '',
+      datasourceOverride: sameDatasource(datasource, originalDatasource) ? null : normalizeDatasource(datasource),
       additionalConfigRequired,
       duplicateSelections,
     }),
-    [
-      application,
-      username,
-      profileId,
-      source,
-      datasource,
-      originalDatasource,
-      additionalConfigRequired,
-      duplicateSelections,
-    ],
+    [application, username, profileId, source, datasource, originalDatasource, additionalConfigRequired, duplicateSelections],
   );
 
   const runPreflight = async () => {
-    if (
-      !requiredValid ||
-      preflightState === "loading" ||
-      profileBusy ||
-      pendingOperationId
-    )
-      return;
+    if (!requiredValid || preflightState === 'loading' || profileBusy || pendingOperationId) return;
     store.setPreflightChecked(true);
-    store.setPreflightState("loading");
-    store.setError("");
-    store.setCancellationWarning("");
+    store.setPreflightState('loading');
+    store.setError('');
+    store.setCancellationWarning('');
     try {
       const result = await preflightWar(payload);
       store.setPreflight(result);
-      store.setPreflightState("ready");
-      reservedProfile.current = result.lockExpiresAt ? profileId : "";
+      store.setPreflightState('ready');
+      reservedProfile.current = result.lockExpiresAt ? profileId : '';
       setNow(Date.now());
-      if (result.activity) mergeActivity(result.activity, "WILDFLY_PROFILE");
+      if (result.activity) mergeActivity(result.activity, 'WILDFLY_PROFILE');
     } catch (reason) {
       store.setPreflightChecked(false);
-      store.setPreflightState("error");
+      store.setPreflightState('error');
       store.setError(reason.message);
-      reservedProfile.current = "";
+      reservedProfile.current = '';
     }
   };
 
@@ -331,7 +278,7 @@ export default function WarDeploymentPage() {
     if (!canDeploy || submissionGuard.current) return;
     submissionGuard.current = true;
     store.setSubmitting(true);
-    store.setError("");
+    store.setError('');
     try {
       const operation = await deployWar(payload);
       if (operation.profileId) {
@@ -340,13 +287,8 @@ export default function WarDeploymentPage() {
             profile.id === operation.profileId
               ? {
                   ...profile,
-                  ...(typeof operation.hasBackup === "boolean"
-                    ? { hasBackup: operation.hasBackup }
-                    : {}),
-                  ...(Object.prototype.hasOwnProperty.call(
-                    operation,
-                    "backupSnapshotId",
-                  )
+                  ...(typeof operation.hasBackup === 'boolean' ? { hasBackup: operation.hasBackup } : {}),
+                  ...(Object.prototype.hasOwnProperty.call(operation, 'backupSnapshotId')
                     ? { backupSnapshotId: operation.backupSnapshotId }
                     : {}),
                 }
@@ -354,20 +296,17 @@ export default function WarDeploymentPage() {
           ),
         );
       }
-      reservedProfile.current = "";
+      reservedProfile.current = '';
       clearLocalPreflight();
+      pendingSnapshotRevision.current = snapshotRevision;
       setPendingOperationId(deploymentIdOf(operation));
       registerOperation(
-        { ...operation, operationType: "WAR_DEPLOY" },
+        { ...operation, operationType: 'WAR_DEPLOY' },
         `WILDFLY_PROFILE:${profileId}`,
         `Deploy WAR · ${application}`,
       );
     } catch (reason) {
-      store.setError(
-        isLockConflict(reason)
-          ? `Profile reservation conflict: ${reason.message}`
-          : reason.message,
-      );
+      store.setError(isLockConflict(reason) ? `Profile reservation conflict: ${reason.message}` : reason.message);
       if (isLockConflict(reason)) clearLocalPreflight();
     } finally {
       submissionGuard.current = false;
@@ -376,20 +315,13 @@ export default function WarDeploymentPage() {
   };
 
   return (
-    <Page
-      title="Deploy WAR"
-      description="Reserve a WildFly profile, validate an existing Tech Drive WAR, and deploy it."
-    >
-      <form
-        onSubmit={submit}
-        className="grid xl:grid-cols-[1.05fr_.95fr] gap-5 items-start"
-      >
+    <Page title="Deploy WAR" description="Reserve a WildFly profile, validate an existing Tech Drive WAR, and deploy it.">
+      <form onSubmit={submit} className="grid xl:grid-cols-[1.05fr_.95fr] gap-5 items-start">
         <Card>
           <CardHeader>
             <CardTitle>Source and target</CardTitle>
             <CardDescription>
-              Profile identifiers and selected paths are submitted exactly as
-              backend UUIDs and Tech Drive-relative paths.
+              Profile identifiers and selected paths are submitted exactly as backend UUIDs and Tech Drive-relative paths.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -397,10 +329,8 @@ export default function WarDeploymentPage() {
               <FormLabel>Application</FormLabel>
               <Select
                 value={application}
-                onValueChange={(value) =>
-                  invalidateAnd(store.setApplication, value)
-                }
-                disabled={applicationState === "loading"}
+                onValueChange={(value) => invalidateAnd(store.setApplication, value)}
+                disabled={applicationState === 'loading'}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select application" />
@@ -413,19 +343,12 @@ export default function WarDeploymentPage() {
                   ))}
                 </SelectContent>
               </Select>
-              {applicationError && (
-                <FormMessage>{applicationError}</FormMessage>
-              )}
+              {applicationError && <FormMessage>{applicationError}</FormMessage>}
             </FormItem>
             <div className="grid sm:grid-cols-2 gap-4">
               <FormItem>
                 <FormLabel>WildFly version</FormLabel>
-                <Select
-                  value={version}
-                  onValueChange={(value) =>
-                    invalidateAnd(store.setVersion, value)
-                  }
-                >
+                <Select value={version} onValueChange={(value) => invalidateAnd(store.setVersion, value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select version" />
                   </SelectTrigger>
@@ -443,10 +366,8 @@ export default function WarDeploymentPage() {
                 <FormLabel>Profile</FormLabel>
                 <Select
                   value={profileId}
-                  onValueChange={(value) =>
-                    invalidateAnd(store.setProfileId, value)
-                  }
-                  disabled={profileState === "loading"}
+                  onValueChange={(value) => invalidateAnd(store.setProfileId, value)}
+                  disabled={profileState === 'loading'}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select profile" />
@@ -455,17 +376,13 @@ export default function WarDeploymentPage() {
                     {filteredProfiles.map((item) => (
                       <SelectItem key={item.id} value={item.id}>
                         {item.name}
-                        {item.portOffset != null
-                          ? ` · offset ${item.portOffset}`
-                          : ""}
+                        {item.portOffset != null ? ` · offset ${item.portOffset}` : ''}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 {selectedProfile?.lastDeployedUser && (
-                  <FormDescription>
-                    Last deployed by {selectedProfile.lastDeployedUser}
-                  </FormDescription>
+                  <FormDescription>Last deployed by {selectedProfile.lastDeployedUser}</FormDescription>
                 )}
               </FormItem>
             </div>
@@ -481,44 +398,31 @@ export default function WarDeploymentPage() {
                 rootKey="techDrive"
                 selectableExtension=".war"
                 selected={source}
-                onSelectionChange={(items) =>
-                  invalidateAnd(store.setSource, items.slice(-1))
-                }
+                onSelectionChange={(items) => invalidateAnd(store.setSource, items.slice(-1))}
               />
               {source[0] ? (
                 <FormDescription className="mt-2">
-                  Selected:{" "}
-                  <span className="font-mono text-foreground">{source[0]}</span>
+                  Selected: <span className="font-mono text-foreground">{source[0]}</span>
                 </FormDescription>
               ) : (
-                <FormMessage className="mt-2">
-                  Select one .war file.
-                </FormMessage>
+                <FormMessage className="mt-2">Select one .war file.</FormMessage>
               )}
             </div>
             <Label
               className={`flex items-start gap-3 rounded-md border p-3 ${
-                additionalConfigRequired
-                  ? "border-primary bg-primary/10"
-                  : ""
+                additionalConfigRequired ? 'border-primary bg-primary/10' : ''
               }`}
             >
               <Checkbox
                 className="mt-0.5"
                 checked={additionalConfigRequired}
-                onCheckedChange={(checked) =>
-                  invalidateAnd(
-                    store.setAdditionalConfigRequired,
-                    checked === true,
-                  )
-                }
+                onCheckedChange={(checked) => invalidateAnd(store.setAdditionalConfigRequired, checked === true)}
               />
               <span>
                 <strong>Apply additional WAR configuration</strong>
                 <span className="mt-1 block text-xs text-muted-foreground">
-                  Require an additionalConfig.toml beside the selected WAR for
-                  properties or web.xml changes. Leave unchecked when no
-                  additional changes are needed.
+                  Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked when
+                  no additional changes are needed.
                 </span>
               </span>
             </Label>
@@ -527,27 +431,23 @@ export default function WarDeploymentPage() {
         <Card className="xl:sticky xl:top-5">
           <CardHeader>
             <CardTitle>Preflight and deployment</CardTitle>
-            <CardDescription>
-              The profile is exclusively reserved until the server-provided
-              expiry time.
-            </CardDescription>
+            <CardDescription>The profile is exclusively reserved until the server-provided expiry time.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <Label
-              className={`flex items-center gap-3 rounded-md border p-3 ${preflightChecked ? "border-primary bg-primary/10" : ""}`}
+              className={`flex items-center gap-3 rounded-md border p-3 ${preflightChecked ? 'border-primary bg-primary/10' : ''}`}
             >
               <Checkbox
                 checked={preflightChecked}
                 disabled={
                   !requiredValid ||
-                  preflightState === "loading" ||
+                  preflightState === 'loading' ||
                   submitting ||
                   !!pendingOperationId ||
-                  profileBusy
+                  profileBusy ||
+                  !!profileLock
                 }
-                onCheckedChange={(checked) =>
-                  checked ? runPreflight() : cancelReservation()
-                }
+                onCheckedChange={(checked) => (checked ? runPreflight() : cancelReservation())}
               />
               <span>
                 <strong>Run preflight and reserve profile</strong>
@@ -556,31 +456,23 @@ export default function WarDeploymentPage() {
                 </span>
               </span>
             </Label>
-            {preflightState === "loading" && (
+            {preflightState === 'loading' && (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Running preflight…
               </p>
             )}
-            {preflightState === "expired" && (
-              <Notice tone="warning">
-                The exclusive reservation expired. Run preflight again before
-                deploying.
-              </Notice>
+            {preflightState === 'expired' && (
+              <Notice tone="warning">The exclusive reservation expired. Run preflight again before deploying.</Notice>
             )}
             {profileBusy && (
               <Notice tone="warning">
-                This profile is currently{" "}
-                {selectedActivity.status.toLowerCase()}. Wait for the backend
-                state to change before starting another deployment.
+                This profile is currently {selectedActivity.status.toLowerCase()}. Wait for the backend state to change before
+                starting another deployment.
               </Notice>
             )}
-            {pendingOperationId && (
-              <Notice>
-                Deployment request accepted. Waiting for the backend activity
-                event…
-              </Notice>
-            )}
+            <LockNotice lock={profileLock} />
+            {pendingOperationId && <Notice>Deployment request accepted. Waiting for the backend activity event…</Notice>}
             {preflight?.warnings?.length > 0 && (
               <Notice tone="warning">
                 <strong>Warnings</strong>
@@ -604,20 +496,18 @@ export default function WarDeploymentPage() {
             {Object.keys(preflight?.automaticallyResolved || {}).length > 0 && (
               <Notice>
                 <strong>Automatically resolved</strong>
-                {Object.entries(preflight.automaticallyResolved).map(
-                  ([file, path]) => (
-                    <div className="font-mono text-xs mt-1" key={file}>
-                      {file} → {path}
-                    </div>
-                  ),
-                )}
+                {Object.entries(preflight.automaticallyResolved).map(([file, path]) => (
+                  <div className="font-mono text-xs mt-1" key={file}>
+                    {file} → {path}
+                  </div>
+                ))}
               </Notice>
             )}
             {duplicates.map(([file, candidates]) => (
               <FormItem key={file}>
                 <FormLabel>Resolve duplicate: {file}</FormLabel>
                 <Select
-                  value={duplicateSelections[file] || ""}
+                  value={duplicateSelections[file] || ''}
                   onValueChange={(value) =>
                     store.setDuplicateSelections((current) => ({
                       ...current,
@@ -636,20 +526,12 @@ export default function WarDeploymentPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                {!duplicateSelections[file] && (
-                  <FormMessage>A selection is required.</FormMessage>
-                )}
+                {!duplicateSelections[file] && <FormMessage>A selection is required.</FormMessage>}
               </FormItem>
             ))}
-            {cancellationWarning && (
-              <Notice tone="warning">{cancellationWarning}</Notice>
-            )}
+            {cancellationWarning && <Notice tone="warning">{cancellationWarning}</Notice>}
             {error && <Notice tone="error">{error}</Notice>}
-            <Button
-              type="submit"
-              disabled={!canDeploy}
-              className="w-full gap-2"
-            >
+            <Button type="submit" disabled={!canDeploy} className="w-full gap-2">
               {submitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : canDeploy ? (
@@ -657,15 +539,13 @@ export default function WarDeploymentPage() {
               ) : (
                 <CheckCircle2 className="w-4 h-4" />
               )}
-              {submitting
-                ? "Starting deployment…"
-                : `Deploy WAR${lockTime > 0 && !expired ? ` (${remainingSeconds})` : ""}`}
+              {submitting ? 'Starting deployment…' : `Deploy WAR${lockTime > 0 && !expired ? ` (${remainingSeconds})` : ''}`}
             </Button>
             <p className="text-xs text-muted-foreground flex gap-2">
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
               {canDeploy
-                ? "All checks passed. Deploy before the reservation expires."
-                : "Complete preflight and resolve every blocking decision."}
+                ? 'All checks passed. Deploy before the reservation expires.'
+                : 'Complete preflight and resolve every blocking decision.'}
             </p>
           </CardContent>
         </Card>
@@ -675,61 +555,44 @@ export default function WarDeploymentPage() {
 }
 
 function DatasourceEditor({ state, error, value, onChange }) {
-  if (state === "idle")
-    return <Notice>Select a profile to load its datasource.</Notice>;
-  if (state === "loading")
+  if (state === 'idle') return <Notice>Select a profile to load its datasource.</Notice>;
+  if (state === 'loading')
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="w-4 h-4 animate-spin" />
         Loading datasource…
       </p>
     );
-  if (state === "error") return <Notice tone="error">{error}</Notice>;
-  if (!value)
-    return (
-      <Notice tone="warning">
-        No datasource was returned for this profile.
-      </Notice>
-    );
-  const update = (field, next) =>
-    onChange((current) => ({ ...current, [field]: next }));
+  if (state === 'error') return <Notice tone="error">{error}</Notice>;
+  if (!value) return <Notice tone="warning">No datasource was returned for this profile.</Notice>;
+  const update = (field, next) => onChange((current) => ({ ...current, [field]: next }));
   return (
     <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
       <div>
         <p className="text-sm font-medium">Profile datasource</p>
-        <p className="text-xs text-muted-foreground">
-          Changes are applied only as part of this WAR deployment.
-        </p>
+        <p className="text-xs text-muted-foreground">Changes are applied only as part of this WAR deployment.</p>
       </div>
       <div className="grid sm:grid-cols-2 gap-3">
-        {["name", "jndiName", "connectionUrl", "username", "password"].map(
-          (field) => (
-            <FormItem
-              className={field === "connectionUrl" ? "sm:col-span-2" : ""}
-              key={field}
-            >
-              <FormLabel>
-                {field === "jndiName"
-                  ? "JNDI name"
-                  : field === "connectionUrl"
-                    ? "Connection URL"
-                    : field[0].toUpperCase() + field.slice(1)}
-              </FormLabel>
-              <Input
-                type={field === "password" ? "password" : "text"}
-                autoComplete={field === "password" ? "new-password" : "off"}
-                value={value[field]}
-                onChange={(event) => update(field, event.target.value)}
-              />
-            </FormItem>
-          ),
-        )}
+        {['name', 'jndiName', 'connectionUrl', 'username', 'password'].map((field) => (
+          <FormItem className={field === 'connectionUrl' ? 'sm:col-span-2' : ''} key={field}>
+            <FormLabel>
+              {field === 'jndiName'
+                ? 'JNDI name'
+                : field === 'connectionUrl'
+                  ? 'Connection URL'
+                  : field[0].toUpperCase() + field.slice(1)}
+            </FormLabel>
+            <Input
+              type={field === 'password' ? 'password' : 'text'}
+              autoComplete={field === 'password' ? 'new-password' : 'off'}
+              value={value[field]}
+              onChange={(event) => update(field, event.target.value)}
+            />
+          </FormItem>
+        ))}
       </div>
       <Label className="flex items-center gap-2">
-        <Checkbox
-          checked={value.enabled}
-          onCheckedChange={(checked) => update("enabled", checked === true)}
-        />
+        <Checkbox checked={value.enabled} onCheckedChange={(checked) => update('enabled', checked === true)} />
         Enabled
       </Label>
     </div>

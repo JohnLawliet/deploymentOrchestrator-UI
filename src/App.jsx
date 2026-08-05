@@ -1,15 +1,15 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import AppLayout from '@/components/layout/AppLayout'
-import PortalDashboardPage from '@/pages/PortalDashboardPage'
-import JarDeployPage from '@/pages/JarDeploymentPage'
-import WarDeployPage from '@/pages/WarDeploymentPage'
-import DownloadsPage from '@/pages/DownloadsPage'
-import TablesPage from '@/pages/TablesPage'
-import UatBuildPage from '@/pages/UatBuildPage'
-import UploadPage from '@/pages/UploadPage'
-import { PortalProvider } from '@/context/PortalContext'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import AppLayout from '@/components/layout/AppLayout';
+import PortalDashboardPage from '@/pages/PortalDashboardPage';
+import JarDeployPage from '@/pages/JarDeploymentPage';
+import WarDeployPage from '@/pages/WarDeploymentPage';
+import DownloadsPage from '@/pages/DownloadsPage';
+import TablesPage from '@/pages/TablesPage';
+import UatBuildPage from '@/pages/UatBuildPage';
+import UploadPage from '@/pages/UploadPage';
+import { PortalProvider } from '@/context/PortalContext';
 
-const basePath = import.meta.env.VITE_BASE_PATH || '/deploymentOrchestrator'
+const basePath = import.meta.env.VITE_BASE_PATH || '/deploymentOrchestrator';
 
 function App() {
   return (
@@ -30,7 +30,7 @@ function App() {
         </Routes>
       </BrowserRouter>
     </PortalProvider>
-  )
+  );
 }
 
-export default App
+export default App;

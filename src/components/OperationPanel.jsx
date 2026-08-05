@@ -1,1 +1,1 @@
-export { default } from '@/components/OperationProgressPanel'
+export { default } from '@/components/OperationProgressPanel';

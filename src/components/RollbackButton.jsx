@@ -1,15 +1,15 @@
-import { useMemo, useState } from 'react'
-import { Loader2, RotateCcw } from 'lucide-react'
-import { getWarSnapshots, isLockConflict, rollbackWar } from '@/lib/contractApi'
-import { isOperationTerminal } from '@/lib/operationProgress'
-import { usePortal } from '@/context/PortalContext'
-import { Button } from '@/components/ui/button'
+import { useMemo, useState } from 'react';
+import { Loader2, RotateCcw } from 'lucide-react';
+import { getWarSnapshots, isLockConflict, rollbackWar } from '@/lib/contractApi';
+import { isOperationTerminal } from '@/lib/operationProgress';
+import { usePortal } from '@/context/PortalContext';
+import { Button } from '@/components/ui/button';
 
-const rollbackOperationType = 'WAR_ROLLBACK'
+const rollbackOperationType = 'WAR_ROLLBACK';
 
 function snapshotTime(value) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Unknown date'
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown date';
   return date.toLocaleString(undefined, {
     year: 'numeric',
     month: '2-digit',
@@ -17,70 +17,64 @@ function snapshotTime(value) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  })
+  });
 }
 
-export default function RollbackButton({
-  profileId,
-  profileName,
-  disabled = false,
-  className = '',
-  buttonClassName = '',
-}) {
-  const { username, registerOperation, operations } = usePortal()
-  const [open, setOpen] = useState(false)
-  const [snapshots, setSnapshots] = useState([])
-  const [state, setState] = useState('idle')
-  const [error, setError] = useState('')
-  const [selectedId, setSelectedId] = useState('')
+export default function RollbackButton({ profileId, profileName, disabled = false, className = '', buttonClassName = '' }) {
+  const { username, registerOperation, operations } = usePortal();
+  const [open, setOpen] = useState(false);
+  const [snapshots, setSnapshots] = useState([]);
+  const [state, setState] = useState('idle');
+  const [error, setError] = useState('');
+  const [selectedId, setSelectedId] = useState('');
   const sortedSnapshots = useMemo(
     () => [...snapshots].sort((left, right) => Date.parse(right.createdAt || '') - Date.parse(left.createdAt || '')),
     [snapshots],
-  )
+  );
   const rollbackBusy = Object.values(operations).some(
     (operation) =>
-      operation.operationType === rollbackOperationType
-      && operation.resourceKey === `WILDFLY_PROFILE:${profileId}`
-      && !isOperationTerminal(operation),
-  )
+      operation.operationType === rollbackOperationType &&
+      operation.resourceKey === `WILDFLY_PROFILE:${profileId}` &&
+      !isOperationTerminal(operation),
+  );
 
   const toggle = async () => {
     if (open) {
-      setOpen(false)
-      return
+      setOpen(false);
+      return;
     }
-    setOpen(true)
-    setState('loading')
-    setError('')
+    setOpen(true);
+    setState('loading');
+    setError('');
     try {
-      const result = await getWarSnapshots(profileId)
-      setSnapshots(Array.isArray(result) ? result : [])
-      setState('ready')
+      const result = await getWarSnapshots(profileId);
+      setSnapshots(Array.isArray(result) ? result : []);
+      setState('ready');
     } catch (reason) {
-      setSnapshots([])
-      setError(reason.message)
-      setState('error')
+      setSnapshots([]);
+      setError(reason.message);
+      setState('error');
     }
-  }
+  };
 
   const selectSnapshot = async (snapshot) => {
-    if (!window.confirm(`Rollback ${profileName || profileId} to snapshot ${snapshot.snapshotId}?`)) return
-    setSelectedId(snapshot.snapshotId)
-    setError('')
+    if (!window.confirm(`Rollback ${profileName || profileId} to snapshot ${snapshot.snapshotId}?`)) return;
+    setSelectedId(snapshot.snapshotId);
+    setError('');
     try {
-      const operation = await rollbackWar(snapshot.snapshotId, username)
+      const operation = await rollbackWar(snapshot.snapshotId, username);
       registerOperation(
         { ...operation, operationType: rollbackOperationType },
         `WILDFLY_PROFILE:${profileId}`,
         `Rollback WAR · ${profileName || profileId}`,
-      )
-      setOpen(false)
+      );
+      setOpen(false);
     } catch (reason) {
-      setError(isLockConflict(reason) ? `Profile conflict: ${reason.message}` : reason.message)
+      setError(isLockConflict(reason) ? `Profile conflict: ${reason.message}` : reason.message);
     } finally {
-      setSelectedId('')
+      setSelectedId('');
     }
-  }
+  };
 
   return (
     <div className={`relative ${className}`}>
@@ -93,9 +87,11 @@ export default function RollbackButton({
         aria-expanded={open}
         onClick={toggle}
       >
-        {state === 'loading' || selectedId
-          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          : <RotateCcw className="h-3.5 w-3.5" />}
+        {state === 'loading' || selectedId ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <RotateCcw className="h-3.5 w-3.5" />
+        )}
         {selectedId || rollbackBusy ? 'Rollback running…' : 'Rollback to previous version'}
       </Button>
       {open && (
@@ -106,7 +102,11 @@ export default function RollbackButton({
               Loading snapshots…
             </p>
           )}
-          {state === 'error' && <p className="p-2 text-sm text-red-700" role="alert">{error}</p>}
+          {state === 'error' && (
+            <p className="p-2 text-sm text-red-700" role="alert">
+              {error}
+            </p>
+          )}
           {state === 'ready' && !sortedSnapshots.length && (
             <p className="p-2 text-sm text-muted-foreground">No snapshots found</p>
           )}
@@ -126,9 +126,13 @@ export default function RollbackButton({
               ))}
             </div>
           )}
-          {error && state !== 'error' && <p className="p-2 text-sm text-red-700" role="alert">{error}</p>}
+          {error && state !== 'error' && (
+            <p className="p-2 text-sm text-red-700" role="alert">
+              {error}
+            </p>
+          )}
         </div>
       )}
     </div>
-  )
+  );
 }

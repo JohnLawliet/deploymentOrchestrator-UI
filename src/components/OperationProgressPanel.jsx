@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { Activity, ChevronDown, ChevronUp, Download, Loader2, Pause, Play, Power, Terminal, X } from 'lucide-react'
-import RollbackButton from '@/components/RollbackButton'
-import { usePortal } from '@/context/PortalContext'
+import { useEffect, useRef, useState } from 'react';
+import { Activity, ChevronDown, ChevronUp, Download, Loader2, Pause, Play, Power, Terminal, X } from 'lucide-react';
+import RollbackButton from '@/components/RollbackButton';
+import { usePortal } from '@/context/PortalContext';
 import {
   downloadTerminal,
   getOperation,
@@ -9,20 +9,13 @@ import {
   stopProfile,
   subscribeProfileLogs,
   unsubscribeProfileLogs,
-} from '@/lib/contractApi'
-import { deploymentIdOf } from '@/lib/deploymentIdentity'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+} from '@/lib/contractApi';
+import { deploymentIdOf } from '@/lib/deploymentIdentity';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-const terminalStates = new Set([
-  'RESOURCE_ACTIVE',
-  'RESOURCE_FAILED',
-  'RESOURCE_INACTIVE',
-  'ACTIVE',
-  'FAILED',
-  'INACTIVE',
-])
+const terminalStates = new Set(['RESOURCE_ACTIVE', 'RESOURCE_FAILED', 'RESOURCE_INACTIVE', 'ACTIVE', 'FAILED', 'INACTIVE']);
 
 const lifecycleStatuses = {
   DEPLOYMENT_FAILED: 'FAILED',
@@ -30,186 +23,173 @@ const lifecycleStatuses = {
   RESOURCE_FAILED: 'FAILED',
   RESOURCE_ACTIVE: 'ACTIVE',
   RESOURCE_INACTIVE: 'INACTIVE',
-}
+};
 
-const missingJarLogMessage = 'No jarDeployment.log was produced because the application launcher did not start.'
+const missingJarLogMessage = 'No jarDeployment.log was produced because the application launcher did not start.';
 
 export default function OperationProgressPanel() {
-  const {
-    viewingOperation,
-    setViewingOperation,
-    operations,
-    reconcileResourceActivity,
-    profileLogLines,
-    clearProfileLogs,
-  } = usePortal()
-  const [record, setRecord] = useState(null)
-  const [actionState, setActionState] = useState('')
-  const [actionError, setActionError] = useState('')
-  const [actionMessage, setActionMessage] = useState('')
-  const [expanded, setExpanded] = useState(true)
-  const [connection, setConnection] = useState('disconnected')
-  const [connectionError, setConnectionError] = useState('')
-  const [autoScroll, setAutoScroll] = useState(true)
-  const outputRef = useRef(null)
-  const releasedProfileRef = useRef('')
-  const operationId = deploymentIdOf(viewingOperation)
-  const live = operationId ? operations[operationId] : null
-  const operationProgress = live?.progress
-  const lifecycleStatus = lifecycleStatuses[live?.statusEvent]
-  const status = lifecycleStatus
-    || operationProgress?.status
-    || live?.statusEvent
-    || live?.state
-    || record?.status
-    || viewingOperation?.status
-    || 'STARTING'
-  const statusTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(status)
-  const phaseCode = statusTerminal ? undefined : operationProgress?.phaseCode || record?.phaseCode
+  const { viewingOperation, setViewingOperation, operations, reconcileResourceActivity, profileLogLines, clearProfileLogs } =
+    usePortal();
+  const [record, setRecord] = useState(null);
+  const [actionState, setActionState] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [actionMessage, setActionMessage] = useState('');
+  const [expanded, setExpanded] = useState(true);
+  const [connection, setConnection] = useState('disconnected');
+  const [connectionError, setConnectionError] = useState('');
+  const [autoScroll, setAutoScroll] = useState(true);
+  const outputRef = useRef(null);
+  const releasedProfileRef = useRef('');
+  const operationId = deploymentIdOf(viewingOperation);
+  const live = operationId ? operations[operationId] : null;
+  const operationProgress = live?.progress;
+  const lifecycleStatus = lifecycleStatuses[live?.statusEvent];
+  const status =
+    lifecycleStatus ||
+    operationProgress?.status ||
+    live?.statusEvent ||
+    live?.state ||
+    record?.status ||
+    viewingOperation?.status ||
+    'STARTING';
+  const statusTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
+  const phaseCode = statusTerminal ? undefined : operationProgress?.phaseCode || record?.phaseCode;
   const suppliedProgress = Number.isFinite(operationProgress?.progressPercentage)
     ? operationProgress.progressPercentage
     : Number.isFinite(record?.progressPercentage)
       ? record.progressPercentage
-      : undefined
-  const completed = status === 'COMPLETED'
-  const failed = status.includes('FAILED')
-  const cancelled = status === 'CANCELLED'
-  const complete = completed || terminalStates.has(status)
+      : undefined;
+  const completed = status === 'COMPLETED';
+  const failed = status.includes('FAILED');
+  const cancelled = status === 'CANCELLED';
+  const complete = completed || terminalStates.has(status);
   const progress = completed
     ? 100
     : failed || cancelled
       ? undefined
-      : suppliedProgress ?? (terminalStates.has(status) ? 100 : undefined)
-  const progressWidth = Math.min(100, Math.max(0, progress ?? 32))
-  const message = (lifecycleStatus ? live?.message : operationProgress?.message)
-    || live?.message
-    || operationProgress?.message
-    || record?.message
-    || (complete
-      ? 'Operation reached a terminal resource state.'
-      : 'The backend is processing this operation.')
-  const badgeVariant = failed
-    ? 'destructive'
-    : completed
-      ? 'success'
-      : cancelled
-        ? 'muted'
-        : complete
-          ? 'success'
-          : 'warning'
-  const resourceKey = live?.resourceKey || viewingOperation?.resourceKey || ''
-  const resourceType = viewingOperation?.resourceType
-    || (String(resourceKey).startsWith('JAR:') ? 'JAR' : 'WILDFLY_PROFILE')
-  const profileId = viewingOperation?.profileId || String(resourceKey).replace(/^WILDFLY_PROFILE:/, '')
-  const profileOutput = resourceType === 'WILDFLY_PROFILE' && viewingOperation?.outputRequested && !!profileId
-  const outputLines = profileLogLines?.[profileId] || []
-  const operationType = live?.operationType || viewingOperation?.operationType || record?.type
-  const warDeployment = operationType === 'WAR_DEPLOY' || operationType === 'QC_WAR'
-  const showFailedWarLog = false
-  const showJarLog = resourceType === 'JAR' && live?.logAvailable === true
-  const showSuccessfulWarActions = completed
-    && warDeployment
-    && String(resourceKey).startsWith('WILDFLY_PROFILE:')
-    && !!profileId
+      : (suppliedProgress ?? (terminalStates.has(status) ? 100 : undefined));
+  const progressWidth = Math.min(100, Math.max(0, progress ?? 32));
+  const message =
+    (lifecycleStatus ? live?.message : operationProgress?.message) ||
+    live?.message ||
+    operationProgress?.message ||
+    record?.message ||
+    (complete ? 'Operation reached a terminal resource state.' : 'The backend is processing this operation.');
+  const badgeVariant = failed ? 'destructive' : completed ? 'success' : cancelled ? 'muted' : complete ? 'success' : 'warning';
+  const resourceKey = live?.resourceKey || viewingOperation?.resourceKey || '';
+  const resourceType = viewingOperation?.resourceType || (String(resourceKey).startsWith('JAR:') ? 'JAR' : 'WILDFLY_PROFILE');
+  const profileId = viewingOperation?.profileId || String(resourceKey).replace(/^WILDFLY_PROFILE:/, '');
+  const profileOutput = resourceType === 'WILDFLY_PROFILE' && viewingOperation?.outputRequested && !!profileId;
+  const outputLines = profileLogLines?.[profileId] || [];
+  const operationType = live?.operationType || viewingOperation?.operationType || record?.type;
+  const warDeployment = operationType === 'WAR_DEPLOY' || operationType === 'QC_WAR';
+  const showFailedWarLog = false;
+  const showJarLog = resourceType === 'JAR' && live?.logAvailable === true;
+  const showSuccessfulWarActions =
+    completed && warDeployment && String(resourceKey).startsWith('WILDFLY_PROFILE:') && !!profileId;
 
   useEffect(() => {
-    if (operationId) setExpanded(true)
-  }, [operationId])
+    if (operationId) setExpanded(true);
+  }, [operationId]);
 
   useEffect(() => {
-    if (!profileOutput) return undefined
-    let disposed = false
-    releasedProfileRef.current = ''
-    clearProfileLogs(profileId)
-    setConnection('connecting')
-    setConnectionError('')
+    if (!profileOutput) return undefined;
+    let disposed = false;
+    releasedProfileRef.current = '';
+    clearProfileLogs(profileId);
+    setConnection('connecting');
+    setConnectionError('');
     subscribeProfileLogs(profileId)
       .then(() => {
-        if (!disposed) setConnection('connected')
+        if (!disposed) setConnection('connected');
       })
       .catch((error) => {
-        if (disposed) return
-        setConnection('disconnected')
-        setConnectionError(error.message)
-      })
+        if (disposed) return;
+        setConnection('disconnected');
+        setConnectionError(error.message);
+      });
     return () => {
-      disposed = true
+      disposed = true;
       if (releasedProfileRef.current !== profileId) {
-        void unsubscribeProfileLogs(profileId).catch(() => {})
+        void unsubscribeProfileLogs(profileId).catch(() => {});
       }
-    }
-  }, [profileOutput, profileId, clearProfileLogs])
+    };
+  }, [profileOutput, profileId, clearProfileLogs]);
 
   useEffect(() => {
     if (autoScroll && outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [autoScroll, profileLogLines, profileId, profileOutput])
+  }, [autoScroll, profileLogLines, profileId, profileOutput]);
 
   useEffect(() => {
-    if (!operationId) return undefined
-    let disposed = false
-    setRecord(null)
-    setActionError('')
-    setActionMessage('')
+    if (!operationId) return undefined;
+    let disposed = false;
+    setRecord(null);
+    setActionError('');
+    setActionMessage('');
     getOperation(operationId)
-      .then((result) => { if (!disposed) setRecord(result) })
-      .catch(() => {})
-    return () => { disposed = true }
-  }, [operationId])
+      .then((result) => {
+        if (!disposed) setRecord(result);
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [operationId]);
 
-  if (!viewingOperation) return null
+  if (!viewingOperation) return null;
 
   const downloadLog = async () => {
-    setActionState('downloading')
-    setActionError('')
-    setActionMessage('')
+    setActionState('downloading');
+    setActionError('');
+    setActionMessage('');
     try {
-      saveBlob(await downloadTerminal(operationId))
+      saveBlob(await downloadTerminal(operationId));
     } catch (error) {
-      setActionError(error.status === 404 ? missingJarLogMessage : error.message)
+      setActionError(error.status === 404 ? missingJarLogMessage : error.message);
     } finally {
-      setActionState('')
+      setActionState('');
     }
-  }
+  };
 
   const closeDrawer = async () => {
-    setActionError('')
+    setActionError('');
     if (profileOutput) {
-      setActionState('closing')
+      setActionState('closing');
       try {
-        await unsubscribeProfileLogs(profileId)
-        releasedProfileRef.current = profileId
-        setViewingOperation(null)
+        await unsubscribeProfileLogs(profileId);
+        releasedProfileRef.current = profileId;
+        setViewingOperation(null);
       } catch (error) {
-        setActionError(error.message)
+        setActionError(error.message);
       } finally {
-        setActionState('')
+        setActionState('');
       }
-      return
+      return;
     }
     if (resourceType === 'JAR' && operationId) {
-      setViewingOperation(null)
-      return
+      setViewingOperation(null);
+      return;
     }
-    setViewingOperation(null)
-  }
+    setViewingOperation(null);
+  };
 
   const stopSelectedProfile = async () => {
-    if (!window.confirm(`Stop profile ${record?.profile || profileId}?`)) return
-    setActionState('stopping')
-    setActionError('')
-    setActionMessage('')
+    if (!window.confirm(`Stop profile ${record?.profile || profileId}?`)) return;
+    setActionState('stopping');
+    setActionError('');
+    setActionMessage('');
     try {
-      await stopProfile(profileId)
-      await reconcileResourceActivity(`WILDFLY_PROFILE:${profileId}`)
-      setActionMessage('Profile stopped successfully.')
+      await stopProfile(profileId);
+      await reconcileResourceActivity(`WILDFLY_PROFILE:${profileId}`);
+      setActionMessage('Profile stopped successfully.');
     } catch (error) {
-      setActionError(error.message)
+      setActionError(error.message);
     } finally {
-      setActionState('')
+      setActionState('');
     }
-  }
+  };
 
   if (!expanded) {
     return (
@@ -222,25 +202,14 @@ export default function OperationProgressPanel() {
             aria-expanded="false"
             onClick={() => setExpanded(true)}
           >
-            <span className="truncate text-sm font-semibold">
-              {viewingOperation.label || 'Operation progress'}
-            </span>
-            {phaseCode && (
-              <span className="hidden truncate font-mono text-xs text-muted-foreground sm:inline">
-                {phaseCode}
-              </span>
-            )}
+            <span className="truncate text-sm font-semibold">{viewingOperation.label || 'Operation progress'}</span>
+            {phaseCode && <span className="hidden truncate font-mono text-xs text-muted-foreground sm:inline">{phaseCode}</span>}
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">
               {failed ? 'Failed' : cancelled ? 'Cancelled' : progress !== undefined ? `${Math.round(progress)}%` : 'In progress'}
             </span>
           </button>
           <Badge variant={badgeVariant}>{status.replace('RESOURCE_', '')}</Badge>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Expand operation progress"
-            onClick={() => setExpanded(true)}
-          >
+          <Button variant="ghost" size="icon" aria-label="Expand operation progress" onClick={() => setExpanded(true)}>
             <ChevronUp className="h-4 w-4" />
           </Button>
           <Button
@@ -260,7 +229,7 @@ export default function OperationProgressPanel() {
           />
         </div>
       </Card>
-    )
+    );
   }
 
   return (
@@ -320,10 +289,7 @@ export default function OperationProgressPanel() {
           >
             <ol className="space-y-1.5">
               {operationProgress.steps.map((step, index) => (
-                <li
-                  className="grid grid-cols-[auto_1fr] gap-x-2 text-xs"
-                  key={`${step.timestamp}-${step.phaseCode}-${index}`}
-                >
+                <li className="grid grid-cols-[auto_1fr] gap-x-2 text-xs" key={`${step.timestamp}-${step.phaseCode}-${index}`}>
                   <span className="font-mono text-primary">{step.phaseCode}</span>
                   <span className="text-muted-foreground">{step.message}</span>
                 </li>
@@ -332,9 +298,7 @@ export default function OperationProgressPanel() {
           </div>
         )}
         {live?.frontendWarning && (
-          <p className="text-sm text-amber-700">
-            {live.frontendWarning} The backend deployment result is unchanged.
-          </p>
+          <p className="text-sm text-amber-700">{live.frontendWarning} The backend deployment result is unchanged.</p>
         )}
         {(live?.resources?.rollbackResult || live?.resources?.rollbackMessage) && (
           <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-sm">
@@ -345,52 +309,36 @@ export default function OperationProgressPanel() {
         {(showFailedWarLog || showJarLog || showSuccessfulWarActions) && (
           <div className="flex flex-wrap items-start gap-2 border-t border-border pt-3">
             {showJarLog && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                disabled={!!actionState}
-                onClick={downloadLog}
-              >
-                {actionState === 'downloading'
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <Download className="h-3.5 w-3.5" />}
+              <Button variant="outline" size="sm" className="gap-2" disabled={!!actionState} onClick={downloadLog}>
+                {actionState === 'downloading' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
                 {actionState === 'downloading' ? 'Downloading…' : 'Download full log'}
               </Button>
             )}
             {showFailedWarLog && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                disabled={!!actionState}
-                onClick={downloadLog}
-              >
-                {actionState === 'downloading'
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <Download className="h-3.5 w-3.5" />}
+              <Button variant="outline" size="sm" className="gap-2" disabled={!!actionState} onClick={downloadLog}>
+                {actionState === 'downloading' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
                 {actionState === 'downloading' ? 'Downloading…' : 'Download Logs'}
               </Button>
             )}
             {showSuccessfulWarActions && (
               <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                  disabled={!!actionState}
-                  onClick={stopSelectedProfile}
-                >
-                  {actionState === 'stopping'
-                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    : <Power className="h-3.5 w-3.5" />}
+                <Button variant="outline" size="sm" className="gap-2" disabled={!!actionState} onClick={stopSelectedProfile}>
+                  {actionState === 'stopping' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Power className="h-3.5 w-3.5" />
+                  )}
                   {actionState === 'stopping' ? 'Stopping…' : 'Stop profile'}
                 </Button>
-                <RollbackButton
-                  profileId={profileId}
-                  profileName={record?.profile || profileId}
-                  disabled={!!actionState}
-                />
+                <RollbackButton profileId={profileId} profileName={record?.profile || profileId} disabled={!!actionState} />
               </>
             )}
           </div>
@@ -400,43 +348,54 @@ export default function OperationProgressPanel() {
             {connectionError}
           </p>
         )}
-        {actionError && <p className="text-sm text-red-700" role="alert">{actionError}</p>}
-        {actionMessage && <p className="text-sm text-green-700" role="status">{actionMessage}</p>}
+        {actionError && (
+          <p className="text-sm text-red-700" role="alert">
+            {actionError}
+          </p>
+        )}
+        {actionMessage && (
+          <p className="text-sm text-green-700" role="status">
+            {actionMessage}
+          </p>
+        )}
         {viewingOperation.profileLogUnavailable && (
-          <p className="text-sm text-amber-700" role="status">Profile log output is no longer available.</p>
+          <p className="text-sm text-amber-700" role="status">
+            Profile log output is no longer available.
+          </p>
         )}
       </CardHeader>
-      {profileOutput && <CardContent className="flex min-h-32 shrink-0 flex-col p-4 pt-0">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="flex items-center gap-2 text-xs font-medium">
-            <Terminal className="h-3.5 w-3.5" />
-            Profile output
-            <span className="font-normal text-muted-foreground">({connection})</span>
-          </span>
-          <div className="flex flex-wrap gap-1">
-            <Button variant="ghost" size="sm" className="gap-2" onClick={() => setAutoScroll((value) => !value)}>
-              {autoScroll ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-              {autoScroll ? 'Pause scroll' : 'Resume scroll'}
-            </Button>
+      {profileOutput && (
+        <CardContent className="flex min-h-32 shrink-0 flex-col p-4 pt-0">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2 text-xs font-medium">
+              <Terminal className="h-3.5 w-3.5" />
+              Profile output
+              <span className="font-normal text-muted-foreground">({connection})</span>
+            </span>
+            <div className="flex flex-wrap gap-1">
+              <Button variant="ghost" size="sm" className="gap-2" onClick={() => setAutoScroll((value) => !value)}>
+                {autoScroll ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                {autoScroll ? 'Pause scroll' : 'Resume scroll'}
+              </Button>
+            </div>
           </div>
-        </div>
-        <div
-          ref={outputRef}
-          className="h-56 min-h-24 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-xs leading-5 text-foreground"
-          aria-live="polite"
-        >
-          {outputLines.length
-            ? outputLines.map((item, index) => (
-                <div
-                  className={item.replayed ? 'text-muted-foreground' : ''}
-                  key={`${item.timestamp || 'line'}-${index}`}
-                >
+          <div
+            ref={outputRef}
+            className="h-56 min-h-24 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-xs leading-5 text-foreground"
+            aria-live="polite"
+          >
+            {outputLines.length ? (
+              outputLines.map((item, index) => (
+                <div className={item.replayed ? 'text-muted-foreground' : ''} key={`${item.timestamp || 'line'}-${index}`}>
                   {item.line}
                 </div>
               ))
-            : <span className="text-muted-foreground">Waiting for output…</span>}
-        </div>
-      </CardContent>}
+            ) : (
+              <span className="text-muted-foreground">Waiting for output…</span>
+            )}
+          </div>
+        </CardContent>
+      )}
     </Card>
-  )
+  );
 }

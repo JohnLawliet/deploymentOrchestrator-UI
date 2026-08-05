@@ -1,10 +1,35 @@
-import { create } from "zustand";
+import { create } from 'zustand';
 
-const resolve = (value, current) => typeof value === "function" ? value(current) : value;
+const resolve = (value, current) => (typeof value === 'function' ? value(current) : value);
 
-const initialFormState = { version: "", profileId: "", application: "", source: [], datasource: null, originalDatasource: null, additionalConfigRequired: false, duplicateSelections: {} };
-const initialDataState = { applications: [], applicationState: "idle", applicationError: "", profiles: [], profileState: "idle", profileError: "", datasourceState: "idle", datasourceError: "" };
-const initialWorkflowState = { preflight: null, preflightState: "idle", preflightChecked: false, error: "", cancellationWarning: "", submitting: false };
+const initialFormState = {
+  version: '',
+  profileId: '',
+  application: '',
+  source: [],
+  datasource: null,
+  originalDatasource: null,
+  additionalConfigRequired: false,
+  duplicateSelections: {},
+};
+const initialDataState = {
+  applications: [],
+  applicationState: 'idle',
+  applicationError: '',
+  profiles: [],
+  profileState: 'idle',
+  profileError: '',
+  datasourceState: 'idle',
+  datasourceError: '',
+};
+const initialWorkflowState = {
+  preflight: null,
+  preflightState: 'idle',
+  preflightChecked: false,
+  error: '',
+  cancellationWarning: '',
+  submitting: false,
+};
 
 const createWarFormSlice = (set) => ({
   ...initialFormState,
@@ -14,7 +39,8 @@ const createWarFormSlice = (set) => ({
   setSource: (value) => set((state) => ({ source: resolve(value, state.source) })),
   setDatasource: (value) => set((state) => ({ datasource: resolve(value, state.datasource) })),
   setOriginalDatasource: (value) => set((state) => ({ originalDatasource: resolve(value, state.originalDatasource) })),
-  setAdditionalConfigRequired: (value) => set((state) => ({ additionalConfigRequired: resolve(value, state.additionalConfigRequired) })),
+  setAdditionalConfigRequired: (value) =>
+    set((state) => ({ additionalConfigRequired: resolve(value, state.additionalConfigRequired) })),
   setDuplicateSelections: (value) => set((state) => ({ duplicateSelections: resolve(value, state.duplicateSelections) })),
 });
 

@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { client, interceptorState } = vi.hoisted(() => {
-  const interceptorState = {}
+  const interceptorState = {};
   return {
     interceptorState,
     client: {
@@ -12,19 +12,21 @@ const { client, interceptorState } = vi.hoisted(() => {
       request: vi.fn(),
       interceptors: {
         request: {
-          use: vi.fn((handler) => { interceptorState.handler = handler }),
+          use: vi.fn((handler) => {
+            interceptorState.handler = handler;
+          }),
         },
       },
     },
-  }
-})
+  };
+});
 
 vi.mock('axios', () => ({
   default: {
     create: () => client,
     isCancel: () => false,
   },
-}))
+}));
 
 import {
   convertUatBuild,
@@ -36,12 +38,16 @@ import {
   executeUpload,
   getDatabaseTableRows,
   getDatabaseTables,
+  getLocks,
   getJarSnapshots,
   getUpload,
   getProfiles,
   getPortStatus,
   getRuntimeResource,
   getWarSnapshots,
+  isLockConflict,
+  onLockConflict,
+  reportUserActivity,
   resolvedTerminalEventUrl,
   rollbackJar,
   rollbackUploadItem,
@@ -56,54 +62,79 @@ import {
   uatBuildOperationEventUrl,
   unsubscribeProfileLogs,
   validateUser,
-} from './contractApi'
+} from './contractApi';
+
+describe('presence and lock contracts', () => {
+  it('reports activity with an empty POST and reads the shared lock list', async () => {
+    client.post.mockResolvedValueOnce({ data: undefined });
+    client.get.mockResolvedValueOnce({ data: [{ resourceKey: 'profile:one' }] });
+
+    await reportUserActivity();
+    await expect(getLocks()).resolves.toEqual([{ resourceKey: 'profile:one' }]);
+    expect(client.post).toHaveBeenCalledWith('/users/activity');
+    expect(client.get).toHaveBeenCalledWith('/locks');
+  });
+
+  it('recognizes HTTP 423 and notifies reconciliation subscribers', async () => {
+    const listener = vi.fn();
+    const unsubscribe = onLockConflict(listener);
+    client.post.mockRejectedValueOnce({ response: { status: 423, data: { message: 'Locked by Mary' } } });
+
+    await expect(stopProfile('profile-1')).rejects.toMatchObject({ status: 423, message: 'Locked by Mary' });
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: 423 }));
+    expect(isLockConflict({ status: 423 })).toBe(true);
+    expect(isLockConflict({ status: 409 })).toBe(false);
+    unsubscribe();
+  });
+});
 
 describe('executeDatabaseQuery', () => {
   beforeEach(() => {
-    sessionStorage.removeItem('qc-deployment-username')
-    client.request.mockReset()
-    client.request.mockResolvedValue({ data: { success: true } })
-    client.get.mockReset()
-    client.post.mockReset()
-    client.put.mockReset()
-    client.delete.mockReset()
-    client.get.mockResolvedValue({ data: [] , headers: {} })
-    client.post.mockResolvedValue({ data: { success: true } })
-  })
+    sessionStorage.removeItem('qc-deployment-username');
+    client.request.mockReset();
+    client.request.mockResolvedValue({ data: { success: true } });
+    client.get.mockReset();
+    client.post.mockReset();
+    client.put.mockReset();
+    client.delete.mockReset();
+    client.get.mockResolvedValue({ data: [], headers: {} });
+    client.post.mockResolvedValue({ data: { success: true } });
+  });
 
   it('adds the stored TechDrive username to backend requests', () => {
-    sessionStorage.setItem('qc-deployment-username', ' deploy-user ')
+    sessionStorage.setItem('qc-deployment-username', ' deploy-user ');
 
     expect(interceptorState.handler({ headers: {} })).toEqual({
       headers: { 'X-TechDrive-Username': 'deploy-user' },
-    })
-  })
+    });
+  });
 
   it('does not add the TechDrive username header when no user is stored', () => {
-    sessionStorage.removeItem('qc-deployment-username')
+    sessionStorage.removeItem('qc-deployment-username');
 
-    expect(interceptorState.handler({ headers: {} })).toEqual({ headers: {} })
-  })
+    expect(interceptorState.handler({ headers: {} })).toEqual({ headers: {} });
+  });
 
   it('validates with the candidate username header and no query parameter', async () => {
-    await validateUser(' candidate-user ')
+    await validateUser(' candidate-user ');
 
     expect(client.get).toHaveBeenCalledWith('/users/validate', {
       headers: { 'X-TechDrive-Username': 'candidate-user' },
-    })
-  })
+    });
+  });
 
   it('executes a DELETE descriptor using its metadata-provided parameters', async () => {
-    const signal = new AbortController().signal
+    const signal = new AbortController().signal;
     const query = {
       name: 'truncate',
       method: 'DELETE',
       path: '/api/database/tables/deployment-records/truncate',
       parameters: [{ name: 'X-TechDrive-Username', location: 'HEADER', required: true }],
-    }
+    };
 
-    await expect(executeDatabaseQuery(query, { 'X-TechDrive-Username': 'spoofed-user' }, signal))
-      .resolves.toEqual({ success: true })
+    await expect(executeDatabaseQuery(query, { 'X-TechDrive-Username': 'spoofed-user' }, signal)).resolves.toEqual({
+      success: true,
+    });
 
     expect(client.request).toHaveBeenCalledWith({
       url: '/database/tables/deployment-records/truncate',
@@ -111,102 +142,96 @@ describe('executeDatabaseQuery', () => {
       params: {},
       headers: {},
       signal,
-    })
-  })
+    });
+  });
 
   it('resolves path parameters for an existing single-record deletion descriptor', async () => {
-    await executeDatabaseQuery({
-      name: 'delete',
-      method: 'DELETE',
-      path: '/api/database/tables/deployment-records/{deploymentId}',
-      parameters: [
-        { name: 'username', location: 'QUERY', required: true },
-        { name: 'deploymentId', location: 'PATH', required: true },
-      ],
-    }, { deploymentId: 'deployment/42', username: 'admin-user' })
+    await executeDatabaseQuery(
+      {
+        name: 'delete',
+        method: 'DELETE',
+        path: '/api/database/tables/deployment-records/{deploymentId}',
+        parameters: [
+          { name: 'username', location: 'QUERY', required: true },
+          { name: 'deploymentId', location: 'PATH', required: true },
+        ],
+      },
+      { deploymentId: 'deployment/42', username: 'admin-user' },
+    );
 
-    expect(client.request).toHaveBeenCalledWith(expect.objectContaining({
-      url: '/database/tables/deployment-records/deployment%2F42',
-      method: 'DELETE',
-      params: {},
-    }))
-  })
+    expect(client.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/database/tables/deployment-records/deployment%2F42',
+        method: 'DELETE',
+        params: {},
+      }),
+    );
+  });
 
   it('uses the full runtime resource, stop, and snapshot contracts', async () => {
-    await getRuntimeResource('WILDFLY_PROFILE:profile/42')
-    await startProfile('profile/42')
-    await stopProfile('profile/42')
-    await getWarSnapshots('profile/42')
+    await getRuntimeResource('WILDFLY_PROFILE:profile/42');
+    await startProfile('profile/42');
+    await stopProfile('profile/42');
+    await getWarSnapshots('profile/42');
 
-    expect(client.get).toHaveBeenNthCalledWith(
-      1,
-      '/resources/WILDFLY_PROFILE%3Aprofile%2F42',
-    )
-    expect(client.post).toHaveBeenNthCalledWith(1, '/profiles/profile%2F42/start')
-    expect(client.post).toHaveBeenNthCalledWith(2, '/profiles/profile%2F42/stop')
-    expect(client.get).toHaveBeenNthCalledWith(
-      2,
-      '/deployments/qc/war/snapshots',
-      { params: { profileId: 'profile/42' } },
-    )
-  })
+    expect(client.get).toHaveBeenNthCalledWith(1, '/resources/WILDFLY_PROFILE%3Aprofile%2F42');
+    expect(client.post).toHaveBeenNthCalledWith(1, '/profiles/profile%2F42/start');
+    expect(client.post).toHaveBeenNthCalledWith(2, '/profiles/profile%2F42/stop');
+    expect(client.get).toHaveBeenNthCalledWith(2, '/deployments/qc/war/snapshots', { params: { profileId: 'profile/42' } });
+  });
 
   it('uses the system port inspection and managed JAR stop contracts', async () => {
-    const signal = new AbortController().signal
-    await getPortStatus(8181, 'orders api', signal)
-    await stopJar('orders/api')
+    const signal = new AbortController().signal;
+    await getPortStatus(8181, 'orders api', signal);
+    await stopJar('orders/api');
 
     expect(client.get).toHaveBeenCalledWith('/system/ports/8181', {
-      params: { applicationName: 'orders api' }, signal,
-    })
-    expect(client.post).toHaveBeenCalledWith('/dashboard/jars/orders%2Fapi/stop', null)
-  })
+      params: { applicationName: 'orders api' },
+      signal,
+    });
+    expect(client.post).toHaveBeenCalledWith('/dashboard/jars/orders%2Fapi/stop', null);
+  });
 
   it('uses dashboard profiles and canonical deployment-record table endpoints', async () => {
-    const signal = new AbortController().signal
+    const signal = new AbortController().signal;
 
-    await getProfiles()
-    await getDatabaseTables(signal)
-    await getDatabaseTableRows('deployment-records', 2, 25, signal)
+    await getProfiles();
+    await getDatabaseTables(signal);
+    await getDatabaseTableRows('deployment-records', 2, 25, signal);
 
-    expect(client.get).toHaveBeenNthCalledWith(1, '/dashboard/profiles')
+    expect(client.get).toHaveBeenNthCalledWith(1, '/dashboard/profiles');
     expect(client.get).toHaveBeenNthCalledWith(2, '/database/tables', {
       signal,
-    })
-    expect(client.get).toHaveBeenNthCalledWith(
-      3,
-      '/database/tables/deployment-records',
-      { params: { page: 2, size: 25 }, signal },
-    )
-  })
+    });
+    expect(client.get).toHaveBeenNthCalledWith(3, '/database/tables/deployment-records', {
+      params: { page: 2, size: 25 },
+      signal,
+    });
+  });
 
   it('downloads terminal logs without sending a username', async () => {
     client.get.mockResolvedValueOnce({
       data: new Blob(['failed output']),
       headers: { 'content-disposition': 'attachment; filename="operation.log"' },
-    })
+    });
 
     await expect(downloadTerminal('operation/42')).resolves.toEqual({
       blob: expect.any(Blob),
       filename: 'operation.log',
-    })
+    });
 
-    expect(client.get).toHaveBeenCalledWith(
-      '/terminals/operation%2F42/download',
-      { responseType: 'blob' },
-    )
-  })
+    expect(client.get).toHaveBeenCalledWith('/terminals/operation%2F42/download', { responseType: 'blob' });
+  });
 
   it('sends the root and selected paths in the bulk file deletion body', async () => {
-    client.delete.mockResolvedValue({ data: { success: true } })
+    client.delete.mockResolvedValue({ data: { success: true } });
 
-    await expect(deleteFiles('techDrive', ['release/a.txt', 'release/b.txt']))
-      .resolves.toEqual({ success: true })
+    await expect(deleteFiles('techDrive', ['release/a.txt', 'release/b.txt'])).resolves.toEqual({ success: true });
 
     expect(client.delete).toHaveBeenCalledWith('/files', {
       data: { rootKey: 'techDrive', paths: ['release/a.txt', 'release/b.txt'] },
-    })
-  })
+    });
+  });
 
   it('preserves structured JAR deployment API errors', async () => {
     client.post.mockRejectedValueOnce({
@@ -217,93 +242,91 @@ describe('executeDatabaseQuery', () => {
           message: 'The selected JAR has no executable launcher.',
         },
       },
-    })
+    });
 
     await expect(deployJar({ applicationName: 'orders' })).rejects.toMatchObject({
       status: 400,
       code: 'JAR_NOT_EXECUTABLE',
       message: 'The selected JAR has no executable launcher.',
-    })
-  })
+    });
+  });
 
   it('submits rollback with the selected snapshot and current deployer', async () => {
-    await rollbackWar('snapshot-1', 'deploy-user')
+    await rollbackWar('snapshot-1', 'deploy-user');
 
-    expect(client.post).toHaveBeenCalledWith(
-      '/deployments/qc/war/rollback',
-      { snapshotId: 'snapshot-1', deployerName: 'deploy-user' },
-    )
-  })
+    expect(client.post).toHaveBeenCalledWith('/deployments/qc/war/rollback', {
+      snapshotId: 'snapshot-1',
+      deployerName: 'deploy-user',
+    });
+  });
 
   it('uses applicationName for JAR snapshots and submits only the snapshot ID for rollback', async () => {
-    await getJarSnapshots('orders/api')
-    await rollbackJar(123)
+    await getJarSnapshots('orders/api');
+    await rollbackJar(123);
 
-    expect(client.get).toHaveBeenCalledWith(
-      '/deployments/qc/jar/snapshots',
-      { params: { applicationName: 'orders/api' } },
-    )
-    expect(client.post).toHaveBeenCalledWith(
-      '/deployments/qc/jar/rollback',
-      { snapshotId: 123 },
-    )
-  })
+    expect(client.get).toHaveBeenCalledWith('/deployments/qc/jar/snapshots', { params: { applicationName: 'orders/api' } });
+    expect(client.post).toHaveBeenCalledWith('/deployments/qc/jar/rollback', { snapshotId: 123 });
+  });
 
   it('uses the canonical terminal event endpoint without identity query parameters', () => {
-    const url = new URL(terminalEventUrl('deployment-1'), 'http://localhost')
-    expect(url.pathname).toBe('/deploymentOrchestrator/api/terminals/deployment-1/events')
-    expect(url.search).toBe('')
-  })
+    const url = new URL(terminalEventUrl('deployment-1'), 'http://localhost');
+    expect(url.pathname).toBe('/deploymentOrchestrator/api/terminals/deployment-1/events');
+    expect(url.search).toBe('');
+  });
 
   it('normalizes an API-relative terminal URL and rejects unrelated supplied paths', () => {
-    expect(new URL(resolvedTerminalEventUrl('/api/terminals/deployment-1/events', 'deployment-1'), 'http://localhost').pathname)
-      .toBe('/deploymentOrchestrator/api/terminals/deployment-1/events')
-    expect(new URL(resolvedTerminalEventUrl('https://untrusted.example/events', 'deployment-1'), 'http://localhost').pathname)
-      .toBe('/deploymentOrchestrator/api/terminals/deployment-1/events')
-  })
+    expect(
+      new URL(resolvedTerminalEventUrl('/api/terminals/deployment-1/events', 'deployment-1'), 'http://localhost').pathname,
+    ).toBe('/deploymentOrchestrator/api/terminals/deployment-1/events');
+    expect(
+      new URL(resolvedTerminalEventUrl('https://untrusted.example/events', 'deployment-1'), 'http://localhost').pathname,
+    ).toBe('/deploymentOrchestrator/api/terminals/deployment-1/events');
+  });
 
   it('uses canonical profile log subscription endpoints', async () => {
-    client.put.mockResolvedValue({ data: {} })
-    client.delete.mockResolvedValue({ data: {} })
+    client.put.mockResolvedValue({ data: {} });
+    client.delete.mockResolvedValue({ data: {} });
 
-    await subscribeProfileLogs('profile/1')
-    await unsubscribeProfileLogs('profile/1')
+    await subscribeProfileLogs('profile/1');
+    await unsubscribeProfileLogs('profile/1');
 
-    expect(client.put).toHaveBeenCalledWith('/profiles/profile%2F1/log-subscriptions')
-    expect(client.delete).toHaveBeenCalledWith('/profiles/profile%2F1/log-subscriptions')
-  })
+    expect(client.put).toHaveBeenCalledWith('/profiles/profile%2F1/log-subscriptions');
+    expect(client.delete).toHaveBeenCalledWith('/profiles/profile%2F1/log-subscriptions');
+  });
 
   it('uses lockId across the UAT build workflow contracts', async () => {
-    const signal = new AbortController().signal
-    const payload = { application: 'orders', sourceWarPath: 'uat.war' }
-    const conversion = { lockId: 'lock/1', duplicateSelections: { 'web.xml': 'WEB-INF/web.xml' } }
-    client.delete.mockResolvedValue({ data: {} })
+    const signal = new AbortController().signal;
+    const payload = { application: 'orders', sourceWarPath: 'uat.war' };
+    const conversion = { lockId: 'lock/1', duplicateSelections: { 'web.xml': 'WEB-INF/web.xml' } };
+    client.delete.mockResolvedValue({ data: {} });
 
-    await preflightUatBuild(payload, signal)
-    await releaseUatBuildLock('lock/1')
-    await convertUatBuild(conversion)
+    await preflightUatBuild(payload, signal);
+    await releaseUatBuildLock('lock/1');
+    await convertUatBuild(conversion);
 
-    expect(client.post).toHaveBeenNthCalledWith(1, '/uat-builds/preflight', payload, { signal })
-    expect(client.delete).toHaveBeenCalledWith('/uat-builds/locks/lock%2F1')
-    expect(client.post).toHaveBeenNthCalledWith(2, '/uat-builds/convert', conversion)
-    expect(uatBuildOperationEventUrl('operation/1')).toBe('http://localhost:8080/deploymentOrchestrator/api/uat-builds/operations/operation%2F1')
-  })
+    expect(client.post).toHaveBeenNthCalledWith(1, '/uat-builds/preflight', payload, { signal });
+    expect(client.delete).toHaveBeenCalledWith('/uat-builds/locks/lock%2F1');
+    expect(client.post).toHaveBeenNthCalledWith(2, '/uat-builds/convert', conversion);
+    expect(uatBuildOperationEventUrl('operation/1')).toBe(
+      'http://localhost:8080/deploymentOrchestrator/api/uat-builds/operations/operation%2F1',
+    );
+  });
 
   it('uses the upload operation ID across execute, refresh, and item rollback', async () => {
-    const payload = { mode: 'REGULAR', sourcePaths: ['release/assets'], target: { kind: 'QC_PATH', reference: 'qc1/import' } }
+    const payload = { mode: 'REGULAR', sourcePaths: ['release/assets'], target: { kind: 'QC_PATH', reference: 'qc1/import' } };
 
-    await createUpload(payload)
-    await getUpload('operation/1')
-    await executeUpload('operation/1', { 'a/config.xml': 'WEB-INF/classes/config.xml' })
-    await rollbackUploadItem('operation/1', 'a/config.xml')
+    await createUpload(payload);
+    await getUpload('operation/1');
+    await executeUpload('operation/1', { 'a/config.xml': 'WEB-INF/classes/config.xml' });
+    await rollbackUploadItem('operation/1', 'a/config.xml');
 
-    expect(client.post).toHaveBeenNthCalledWith(1, '/uploads', payload)
-    expect(client.get).toHaveBeenCalledWith('/uploads/operation%2F1')
+    expect(client.post).toHaveBeenNthCalledWith(1, '/uploads', payload);
+    expect(client.get).toHaveBeenCalledWith('/uploads/operation%2F1');
     expect(client.post).toHaveBeenNthCalledWith(2, '/uploads/operation%2F1/execute', {
       selectedTargets: { 'a/config.xml': 'WEB-INF/classes/config.xml' },
-    })
+    });
     expect(client.post).toHaveBeenNthCalledWith(3, '/uploads/operation%2F1/rollback', {
       sourcePath: 'a/config.xml',
-    })
-  })
-})
+    });
+  });
+});
