@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const port = parseInt(env.VITE_FRONTEND_PORT || '3000')
   const basePath = env.VITE_BASE_PATH || '/deploymentOrchestrator'
+  const apiContextPath = env.VITE_API_CONTEXT_PATH || basePath
   const proxyTarget = env.VITE_PROXY_TARGET || 'http://localhost:8080'
 
   return {
@@ -28,7 +29,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port,
       proxy: {
-        [`${basePath}/api`]: {
+        [`${apiContextPath}/api`]: {
           target: proxyTarget,
           changeOrigin: true,
         },

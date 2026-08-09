@@ -57,9 +57,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const isApiError = (value: unknown): value is ApiError =>
   isRecord(value) && typeof value.message === 'string' && typeof value.code === 'string';
 
+// The portal can be hosted separately from the backend.  For example, Apache
+// serves the UI at `/` while proxying the backend application at `/tms`.
+// Keep the API context independent of the React/Vite base path for that case.
 const contextPath = (import.meta.env.VITE_BASE_PATH || '/deploymentOrchestrator').replace(/\/$/, '');
+const apiContextPath = (import.meta.env.VITE_API_CONTEXT_PATH || contextPath).replace(/\/$/, '');
 const backendOrigin = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '');
-const apiBaseUrl = `${backendOrigin}${contextPath}/api`;
+const apiBaseUrl = `${backendOrigin}${apiContextPath}/api`;
 const client = axios.create({ baseURL: apiBaseUrl, headers: { 'Content-Type': 'application/json' } });
 const lockConflictListeners = new Set<(error: ApiRequestError) => void>();
 export const techDriveHeaders = (username = getStoredPortalUsername()): Partial<ApiHeaders> =>
@@ -398,8 +402,8 @@ export function terminalEventUrl(deploymentId: string): string {
 
 export function resolvedTerminalEventUrl(suppliedPath: string | null | undefined, deploymentId: string): string {
   const path = String(suppliedPath || '').trim();
-  if (path.startsWith('/api/')) return `${backendOrigin}${contextPath}${path}`;
-  if (path.startsWith(`${contextPath}/api/`)) return `${backendOrigin}${path}`;
+  if (path.startsWith('/api/')) return `${backendOrigin}${apiContextPath}${path}`;
+  if (path.startsWith(`${apiContextPath}/api/`)) return `${backendOrigin}${path}`;
   return terminalEventUrl(deploymentId);
 }
 

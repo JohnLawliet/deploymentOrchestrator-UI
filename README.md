@@ -33,7 +33,8 @@ App is available at `http://localhost:3000/deploymentOrchestrator`.
 | `VITE_FRONTEND_PORT` | `3000` | Vite dev server port |
 | `VITE_BACKEND_URL` | empty | API origin; empty uses relative URLs |
 | `VITE_PROXY_TARGET` | `http://localhost:8080` | Backend target used by the local Vite proxy |
-| `VITE_BASE_PATH` | `/deploymentOrchestrator` | App base path / Spring Boot context path |
+| `VITE_BASE_PATH` | `/deploymentOrchestrator` | App base path / static-resource mount point |
+| `VITE_API_CONTEXT_PATH` | `VITE_BASE_PATH` | Backend context path used for API and event-stream URLs |
 
 ### Environment builds
 
@@ -44,6 +45,22 @@ npm run build:qc
 
 Both deployment builds use same-origin API URLs. Environment-specific server
 filesystem roots remain backend configuration and are not embedded in the UI.
+
+### Apache simQC/QC deployment
+
+When Apache serves the UI from its `DocumentRoot` and proxies the backend at
+`/tms/`, use the supplied `simqc` or `qc` build mode. Those modes build the
+SPA at `/` and send API requests to `/tms/api/...` on the same origin:
+
+```bash
+npm run build:simqc
+# or
+npm run build:qc
+```
+
+Copy the contents of `dist/` to Apache's configured `DocumentRoot`. The
+browser never contacts the backend IP directly, so no browser CORS policy is
+required; Apache handles the `/tms/` proxy hop.
 
 ---
 
