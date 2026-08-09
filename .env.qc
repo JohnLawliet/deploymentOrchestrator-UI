@@ -1,6 +1,3 @@
-VITE_APP_NAME=Deployment Orchestrator (QC)
+VITE_APP_NAME=Deployment Orchestrator
+VITE_BACKEND_URL=http://1.255.255.3:9962
 VITE_BASE_PATH=/deploymentOrchestrator
-
-# The QC build is served by its Spring Boot backend, so API requests remain on
-# the same host and port.
-VITE_BACKEND_URL=

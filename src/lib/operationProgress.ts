@@ -1,0 +1,273 @@
+import type { DeploymentStatus, OperationProgress, SystemEvent } from '@/types/api-contracts';
+import type { OperationMap, OperationProgressState, OperationRecord, OperationStatus } from '@/types/frontend';
+
+type OperationProgressEvent = Extract<SystemEvent, { eventType: 'OPERATION_PROGRESS' }>;
+type ProgressStep = Omit<OperationProgress, 'status'> & { status: string | null; timestamp: string; message: string | null };
+type ReconciliationRecord = Partial<OperationProgress> & {
+  message?: string | null;
+  timestamp?: string;
+  lastUpdatedOn?: string | null;
+};
+
+export const DEPLOYMENT_STATUSES: ReadonlySet<DeploymentStatus> = new Set([
+  'QUEUED',
+  'VALIDATING',
+  'LOCKING',
+  'PREPARING',
+  'DEPLOYING',
+  'RESTARTING',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+]);
+
+const TERMINAL_DEPLOYMENT_STATUSES: ReadonlySet<OperationStatus> = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
+
+const TERMINAL_LIFECYCLE_EVENTS = new Set([
+  'RESOURCE_ACTIVE',
+  'RESOURCE_FAILED',
+  'RESOURCE_INACTIVE',
+  'DEPLOYMENT_SUCCEEDED',
+  'DEPLOYMENT_FAILED',
+]);
+const UNREGISTERED_TTL_MS = 15 * 60 * 1000;
+const MAX_UNREGISTERED_OPERATIONS = 100;
+const MAX_EVENT_KEYS = 200;
+const MAX_STEPS = 100;
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+const isNullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
+const isNullablePercentage = (value: unknown): value is number | null =>
+  value === null || (typeof value === 'number' && Number.isFinite(value));
+const isDeploymentStatus = (value: string): value is DeploymentStatus => DEPLOYMENT_STATUSES.has(value as DeploymentStatus);
+const isTerminalDeploymentStatus = (value: string | null | undefined): boolean =>
+  value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
+
+function isOperationProgressEvent(event: unknown): event is OperationProgressEvent {
+  if (!isObject(event) || event.eventType !== 'OPERATION_PROGRESS' || !isObject(event.resources)) return false;
+  const progress = event.resources;
+  return (
+    typeof event.timestamp === 'string' &&
+    typeof event.deploymentId === 'string' &&
+    !!event.deploymentId &&
+    isNullableString(event.resourceKey) &&
+    isNullableString(event.resourceType) &&
+    isNullableString(event.state) &&
+    (event.pid === null || (typeof event.pid === 'number' && Number.isFinite(event.pid))) &&
+    isNullableString(event.username) &&
+    isNullableString(event.message) &&
+    typeof progress.phaseCode === 'string' &&
+    !!progress.phaseCode &&
+    typeof progress.status === 'string' &&
+    isNullablePercentage(progress.progressPercentage) &&
+    isNullableString(progress.component)
+  );
+}
+
+export function parseOperationProgressData(data: string): OperationProgressEvent | null {
+  let event: unknown;
+  try {
+    event = JSON.parse(data);
+  } catch {
+    return null;
+  }
+
+  return isOperationProgressEvent(event) ? event : null;
+}
+
+function eventKey(event: OperationProgressEvent): string {
+  const progress = event.resources;
+  return JSON.stringify([
+    event.timestamp,
+    event.resourceKey,
+    event.resourceType,
+    deploymentIdOf(event),
+    event.username,
+    event.message,
+    progress.phaseCode,
+    progress.status,
+    progress.progressPercentage,
+    progress.component,
+  ]);
+}
+
+function withBoundedItem<T>(items: T[], item: T, limit: number): T[] {
+  const next = [...items, item];
+  return next.length > limit ? next.slice(next.length - limit) : next;
+}
+
+function pruneUnregisteredOperations(operations: OperationMap, now = Date.now()): OperationMap {
+  const next = { ...operations };
+  const unregistered = Object.entries(next)
+    .filter(([, operation]) => operation?.progress && !operation.registered)
+    .sort(([, left], [, right]) => (right.progress?.receivedAt ?? 0) - (left.progress?.receivedAt ?? 0));
+
+  unregistered.forEach(([operationId, operation], index) => {
+    const expired = now - (operation.progress?.receivedAt ?? 0) > UNREGISTERED_TTL_MS;
+    if (expired || index >= MAX_UNREGISTERED_OPERATIONS) delete next[operationId];
+  });
+  return next;
+}
+
+export function reduceOperationProgress(operations: OperationMap, event: OperationProgressEvent, now = Date.now()): OperationMap {
+  const deploymentId = event.deploymentId;
+  if (!deploymentId) return operations;
+  const existing = operations[deploymentId] || { deploymentId };
+  const previous = existing.progress;
+  const key = eventKey(event);
+  if (previous?.eventKeys?.includes(key)) return operations;
+
+  const supplied = event.resources;
+  if (isTerminalDeploymentStatus(previous?.status)) return operations;
+  const status = isDeploymentStatus(supplied.status) ? supplied.status : (previous?.status ?? null);
+  const progressPercentage = status === 'COMPLETED' ? 100 : (supplied.progressPercentage ?? previous?.progressPercentage ?? null);
+  const step: ProgressStep = {
+    timestamp: event.timestamp,
+    phaseCode: supplied.phaseCode,
+    message: event.message,
+    status,
+    progressPercentage,
+    component: supplied.component,
+  };
+  const progress: OperationProgressState = {
+    phaseCode: supplied.phaseCode,
+    status,
+    progressPercentage,
+    component: supplied.component,
+    message: event.message,
+    timestamp: event.timestamp,
+    resourceKey: event.resourceKey,
+    resourceType: event.resourceType,
+    username: event.username,
+    firstReceivedAt: previous?.firstReceivedAt || now,
+    receivedAt: now,
+    revision: (previous?.revision || 0) + 1,
+    eventKeys: withBoundedItem(previous?.eventKeys ?? [], key, MAX_EVENT_KEYS),
+    steps: withBoundedItem(previous?.steps ?? [], step, MAX_STEPS),
+  };
+
+  return pruneUnregisteredOperations(
+    {
+      ...operations,
+      [deploymentId]: {
+        ...existing,
+        deploymentId,
+        resourceKey: event.resourceKey ?? existing.resourceKey,
+        resourceType: event.resourceType ?? existing.resourceType,
+        progress,
+      },
+    },
+    now,
+  );
+}
+
+export function registerOperationInMap(
+  operations: OperationMap,
+  operation: Partial<OperationRecord>,
+  resourceKey: string,
+  label: string,
+  now = Date.now(),
+): OperationMap {
+  const deploymentId = deploymentIdOf(operation);
+  if (!deploymentId) return operations;
+  const existing = operations[deploymentId] || { deploymentId };
+  const registeredOperation = { ...operation };
+  if (operation.resourceType === 'JAR' || String(resourceKey || '').startsWith('JAR:')) {
+    delete registeredOperation.logAvailable;
+  }
+  return {
+    ...operations,
+    [deploymentId]: {
+      ...existing,
+      ...registeredOperation,
+      deploymentId,
+      resourceKey,
+      label,
+      registered: true,
+      startTime: existing.startTime || new Date(now).toISOString(),
+      ...(existing.progress ? { progress: existing.progress } : {}),
+      ...(existing.terminalAvailabilityConfirmed !== undefined
+        ? { terminalAvailabilityConfirmed: existing.terminalAvailabilityConfirmed }
+        : {}),
+      ...(existing.logAvailable !== undefined ? { logAvailable: existing.logAvailable } : {}),
+    },
+  };
+}
+
+export function reconcileOperationProgress(
+  operations: OperationMap,
+  operationId: string,
+  record: ReconciliationRecord,
+  expectedRevision: number,
+  now = Date.now(),
+): OperationMap {
+  const existing = operations[operationId];
+  if (!existing || (existing.progress?.revision || 0) !== expectedRevision) return operations;
+
+  const previous = existing.progress;
+  if (!previous || isTerminalDeploymentStatus(previous.status)) return operations;
+  const phaseCode = typeof record.phaseCode === 'string' && record.phaseCode ? record.phaseCode : previous.phaseCode;
+  const status =
+    record.status === null || record.status === undefined
+      ? (previous.status ?? null)
+      : isDeploymentStatus(record.status)
+        ? record.status
+        : (previous.status ?? null);
+  const progressPercentage =
+    record.progressPercentage === null
+      ? (previous.progressPercentage ?? null)
+      : typeof record.progressPercentage === 'number' && Number.isFinite(record.progressPercentage)
+        ? record.progressPercentage
+        : (previous.progressPercentage ?? null);
+  const message = typeof record.message === 'string' ? record.message : previous.message;
+  if (!phaseCode && !status && progressPercentage === null && !message) return operations;
+
+  const timestamp =
+    typeof record.timestamp === 'string'
+      ? record.timestamp
+      : typeof record.lastUpdatedOn === 'string'
+        ? record.lastUpdatedOn
+        : new Date(now).toISOString();
+  const key = JSON.stringify(['reconcile', timestamp, phaseCode, status, progressPercentage, message]);
+  const duplicate = previous.eventKeys?.includes(key);
+  const step: ProgressStep = {
+    timestamp,
+    phaseCode: phaseCode || 'UNKNOWN',
+    message: message || '',
+    status,
+    progressPercentage,
+    component: previous.component || '',
+  };
+
+  return {
+    ...operations,
+    [operationId]: {
+      ...existing,
+      progress: {
+        ...previous,
+        phaseCode,
+        status,
+        progressPercentage,
+        message,
+        timestamp,
+        receivedAt: now,
+        revision: (previous.revision || 0) + 1,
+        eventKeys: duplicate ? previous.eventKeys || [] : withBoundedItem(previous.eventKeys || [], key, MAX_EVENT_KEYS),
+        steps: duplicate ? previous.steps || [] : withBoundedItem(previous.steps || [], step, MAX_STEPS),
+      },
+    },
+  };
+}
+
+export function isOperationTerminal(operation: OperationRecord | null | undefined): boolean {
+  const status = operation?.progress?.status || operation?.status;
+  if (isTerminalDeploymentStatus(status)) return true;
+  return TERMINAL_LIFECYCLE_EVENTS.has(operation?.statusEvent ?? '');
+}
+
+export function activeRegisteredOperations(operations: OperationMap): OperationRecord[] {
+  return Object.values(operations).filter((operation) => operation.registered && !isOperationTerminal(operation));
+}
+
+import { deploymentIdOf } from './deploymentIdentity';
