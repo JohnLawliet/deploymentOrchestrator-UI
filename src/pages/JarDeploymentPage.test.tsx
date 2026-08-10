@@ -29,6 +29,7 @@ type SelectProps = {
 
 const api = vi.hoisted(() => ({
   deployJar: vi.fn(),
+  fetchJarBat: vi.fn(),
   getJars: vi.fn(),
   getPortStatus: vi.fn(),
   isLockConflict: vi.fn(() => false),
@@ -114,6 +115,7 @@ describe('JarDeploymentPage port contract', () => {
       ],
     });
     api.deployJar.mockResolvedValue({ deploymentId: 'deployment-1' });
+    api.fetchJarBat.mockResolvedValue('java -jar Orders.jar --spring.profiles.active=qc --server.port=8087');
     api.getPortStatus.mockReset();
     api.getPortStatus.mockResolvedValue({
       port: 8087,
@@ -150,6 +152,7 @@ describe('JarDeploymentPage port contract', () => {
 
   const selectExistingJar = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(screen.getByRole('button', { name: 'Select test JAR' }));
+    await user.click(screen.getByLabelText('Yes, include launcher settings'));
   };
 
   it('checks a valid port only after the 800 ms debounce', async () => {
@@ -194,6 +197,7 @@ describe('JarDeploymentPage port contract', () => {
     expect(submit).toBeDisabled();
     expect(screen.queryByText('Port is required.')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Select test JAR' }));
+    await user.click(screen.getByLabelText('Yes, include launcher settings'));
     expect(screen.getByLabelText('Application name (required)')).toHaveValue('orders');
 
     await user.type(screen.getByLabelText('Port number (required)'), '65536');
@@ -208,6 +212,7 @@ describe('JarDeploymentPage port contract', () => {
     render(<JarDeploymentPage />);
 
     await user.click(screen.getByRole('button', { name: 'Select test JAR' }));
+    await user.click(screen.getByLabelText('Yes, include launcher settings'));
     expect(screen.getByLabelText('Application name (required)')).toHaveValue('orders');
     await user.type(screen.getByLabelText('Port number (required)'), '8087');
     await waitForAvailablePort();
@@ -221,6 +226,7 @@ describe('JarDeploymentPage port contract', () => {
     render(<JarDeploymentPage />);
 
     await user.click(screen.getByRole('button', { name: 'Select test JAR' }));
+    await user.click(screen.getByLabelText('Yes, include launcher settings'));
     expect(screen.getByLabelText('Application name (required)')).toHaveValue('Orders');
     await user.type(screen.getByLabelText('Port number (required)'), '8087');
     await waitForAvailablePort();
@@ -235,6 +241,7 @@ describe('JarDeploymentPage port contract', () => {
 
     expect(screen.queryByText(/must start with a letter or number/)).not.toBeInTheDocument();
     expect(screen.queryByText('Port is required.')).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText('Yes, include launcher settings'));
 
     const portInput = screen.getByLabelText('Port number (required)');
     await user.click(portInput);
@@ -250,9 +257,55 @@ describe('JarDeploymentPage port contract', () => {
     await waitForAvailablePort();
     await user.click(screen.getByLabelText('Yes, include launcher settings'));
 
-    const script = screen.getByLabelText('Generated launcher command');
+    const script = screen.getByLabelText('Launcher script preview');
     expect(script).toHaveValue('java -jar Orders.jar --spring.profiles.active=qc --server.port=8087');
     expect(script).toHaveAttribute('readonly');
+  });
+
+  it('reuses the snapshot launcher settings without parsing the fetched BAT', async () => {
+    portal.jarProfileActivityMap = {
+      orders: {
+        id: 'orders',
+        applicationName: 'Orders',
+        applicationPort: 8087,
+        javaExecutablePath: 'C:\\Java\\bin\\java.exe',
+      },
+    };
+    api.fetchJarBat.mockResolvedValue('java -jar Orders.jar --server.port=9090');
+    const user = userEvent.setup();
+    render(<JarDeploymentPage />);
+    await user.click(screen.getByRole('button', { name: 'Select test JAR' }));
+
+    expect(await screen.findByLabelText('Launcher script preview')).toHaveValue('java -jar Orders.jar --server.port=9090');
+    expect(screen.getByText(/Saved Java path: C:\\Java\\bin\\java.exe/)).toBeVisible();
+    await waitForAvailablePort();
+    expect(api.getPortStatus).toHaveBeenCalledWith(8087, 'Orders', expect.any(AbortSignal));
+    await user.click(screen.getByRole('button', { name: 'Deploy JAR' }));
+
+    await waitFor(() =>
+      expect(api.deployJar).toHaveBeenCalledWith(expect.objectContaining({ launcher: { mode: 'REUSE_EXISTING' } })),
+    );
+  });
+
+  it('includes a supplied QC Java path in the generated launcher preview and payload', async () => {
+    const user = userEvent.setup();
+    render(<JarDeploymentPage />);
+    await selectExistingJar(user);
+    await user.type(screen.getByLabelText('Port number (required)'), '8087');
+    await user.type(screen.getByLabelText('Java path in QC (optional)'), 'C:\\Java\\bin\\java.exe');
+    await waitForAvailablePort();
+
+    expect(screen.getByLabelText('Launcher script preview')).toHaveValue(
+      'C:\\Java\\bin\\java.exe -jar Orders.jar --spring.profiles.active=qc --server.port=8087',
+    );
+    await user.click(screen.getByRole('button', { name: 'Deploy JAR' }));
+    await waitFor(() =>
+      expect(api.deployJar).toHaveBeenCalledWith(
+        expect.objectContaining({
+          launcher: { mode: 'GENERATE_AND_SAVE', port: 8087, javaExecutablePath: 'C:\\Java\\bin\\java.exe' },
+        }),
+      ),
+    );
   });
 
   it('requires a frontend choice and keeps frontend setup independent from launcher settings', async () => {
@@ -263,13 +316,21 @@ describe('JarDeploymentPage port contract', () => {
     await waitForAvailablePort();
 
     expect(screen.getByRole('button', { name: 'Deploy JAR' })).toBeEnabled();
-    expect(screen.queryByLabelText('Generated launcher command')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Launcher script preview')).toHaveValue(
+      'java -jar Orders.jar --spring.profiles.active=qc --server.port=8087',
+    );
 
     await user.click(screen.getByLabelText('Include frontend'));
     await user.click(screen.getByLabelText('Deploy to frontend'));
     await user.click(screen.getByText('Select orders-ui'));
     await user.click(screen.getByRole('button', { name: 'Select frontend build' }));
-    expect(screen.queryByLabelText('Generated launcher command')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Launcher script preview')).toHaveValue(
+      [
+        'java -jar Orders.jar --spring.profiles.active=qc --server.port=8087',
+        'REM Frontend profile: orders-ui',
+        'REM Frontend document root: /srv/www/orders',
+      ].join('\n'),
+    );
     expect(screen.getByRole('button', { name: 'Deploy JAR' })).toBeEnabled();
 
     await user.click(screen.getByRole('button', { name: 'Deploy JAR' }));
@@ -278,7 +339,7 @@ describe('JarDeploymentPage port contract', () => {
         applicationName: 'Orders',
         catalogueJarId: 'orders',
         sourcePath: 'tech/orders.jar',
-        port: 8087,
+        launcher: { mode: 'GENERATE_AND_SAVE', port: 8087, javaExecutablePath: null },
         frontend: {
           mode: 'DEPLOY',
           profileUuid: 'frontend-uuid',
@@ -309,10 +370,7 @@ describe('JarDeploymentPage port contract', () => {
         applicationName: 'Orders',
         catalogueJarId: 'orders',
         sourcePath: 'tech/orders.jar',
-        port: 8087,
-        script: {
-          scriptLine: 'java -jar Orders.jar --spring.profiles.active=qc --server.port=8087',
-        },
+        launcher: { mode: 'GENERATE_AND_SAVE', port: 8087, javaExecutablePath: null },
         frontend: {
           mode: 'DEPLOY',
           profileUuid: 'frontend-uuid',
@@ -432,7 +490,7 @@ describe('JarDeploymentPage port contract', () => {
         applicationName: 'Orders',
         catalogueJarId: 'orders',
         sourcePath: 'tech/orders.jar',
-        port: 8087,
+        launcher: { mode: 'GENERATE_AND_SAVE', port: 8087, javaExecutablePath: null },
         healthUrl: 'https://orders.example/actuator/health',
         frontend: { mode: 'NONE' },
       }),
@@ -493,9 +551,8 @@ describe('JarDeploymentPage port contract', () => {
     expect(payload).not.toHaveProperty('healthUrl');
     expect(payload).not.toHaveProperty('frontendProfile');
     expect(payload).not.toHaveProperty('frontendProfileName');
-    expect(payload.script).toEqual({
-      scriptLine: 'java -jar Orders.jar --spring.profiles.active=qc --server.port=8087',
-    });
+    expect(payload).not.toHaveProperty('script');
+    expect(payload.launcher).toEqual({ mode: 'GENERATE_AND_SAVE', port: 8087, javaExecutablePath: null });
     expect(payload.frontend).toEqual({ mode: 'NONE' });
     for (const obsolete of ['profileId', 'projectName', 'requiresScript', 'deleteBackup', 'deployerName']) {
       expect(payload).not.toHaveProperty(obsolete);

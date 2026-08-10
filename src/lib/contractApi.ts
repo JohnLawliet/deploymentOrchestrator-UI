@@ -14,6 +14,7 @@ import type {
   FileRoot,
   JarCatalogueResponse,
   JarDeploymentRequest,
+  JarBatFetchResponse,
   JarPreflightCheckResponse,
   JarSnapshotSummary,
   LockInfo,
@@ -208,6 +209,17 @@ export const deployJar = (payload: JarDeploymentRequest): Promise<DeploymentStar
     client.post<DeploymentStartResponse>('/deployments/qc/jar', payload),
     'JAR deployment was rejected',
   );
+export const fetchJarBat = async (applicationName: string, signal?: AbortSignal): Promise<string> => {
+  const response = await request<JarBatFetchResponse>(
+    client.get<JarBatFetchResponse>('/deployments/qc/jar/fetch-bat', {
+      params: { applicationName },
+      signal,
+    }),
+    'Unable to fetch the existing launcher file',
+  );
+  if (typeof response.content === 'string') return response.content;
+  throw new Error('The existing launcher file did not contain script text.');
+};
 export const getPortStatus = (port: number, applicationName?: string, signal?: AbortSignal): Promise<PortStatus> =>
   request<PortStatus>(
     client.get<PortStatus>(`/system/ports/${encodeURIComponent(port)}`, {

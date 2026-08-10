@@ -13,8 +13,13 @@ export function isValidJarApplicationName(value: string): boolean {
   return JAR_APPLICATION_NAME_PATTERN.test(String(value || '').trim());
 }
 
-export function generatedJarCommand(applicationName: string, port: string | number | null | undefined): string {
+export function generatedJarCommand(
+  applicationName: string,
+  port: string | number | null | undefined,
+  javaPath?: string | null,
+): string {
   const name = String(applicationName || '').trim() || 'application';
   const selectedPort = port === '' || port === null || port === undefined ? 'x' : port;
-  return `java -jar ${name}.jar --spring.profiles.active=qc --server.port=${selectedPort}`;
+  const executable = String(javaPath || '').trim() || 'java';
+  return `${executable} -jar ${name}.jar --spring.profiles.active=qc --server.port=${selectedPort}`;
 }

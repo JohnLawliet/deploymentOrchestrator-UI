@@ -77,9 +77,14 @@ export interface UserPresence {
   revision: number;
 }
 
-export interface JarScript {
-  scriptLine?: string | null;
-  frontendProfileUuid?: string | null;
+export type JarLauncherMode = 'REUSE_EXISTING' | 'GENERATE_AND_SAVE';
+export interface JarLauncher {
+  mode: JarLauncherMode;
+  port?: number | null;
+  javaExecutablePath?: string | null;
+}
+export interface JarBatFetchResponse {
+  content: string;
 }
 export interface JarFrontendDeployment {
   mode?: 'NONE' | 'REUSE_ASSOCIATION' | 'DEPLOY';
@@ -93,9 +98,8 @@ export interface JarFrontendDeployment {
 export interface JarDeploymentRequest {
   applicationName: string;
   sourcePath: string;
-  port: number;
+  launcher: JarLauncher;
   healthUrl?: string | null;
-  script?: JarScript | null;
   catalogueJarId?: string | null;
   frontend?: JarFrontendDeployment | null;
 }
@@ -301,6 +305,7 @@ export interface RuntimeResource {
 }
 /** JAR resource views flatten RuntimeResource fields with these additions. */
 export interface JarRuntimeResource extends RuntimeResource {
+  javaExecutablePath: string | null;
   frontendProfileUuid: string | null;
   frontendProfile: FrontendProfileActivity | null;
 }
@@ -314,6 +319,7 @@ export interface JarProfileActivity {
   terminalDeploymentId: string | null;
   jarName: string;
   applicationPort: number | null;
+  javaExecutablePath: string | null;
   healthUrl: string | null;
   healthReason: string | null;
   readiness: RuntimeReadiness;
@@ -626,6 +632,7 @@ export interface ApiRoutes {
   'POST /api/dashboard/jars/{application}/stop': { path: { application: string }; response: DeploymentStartResponse };
   'POST /api/dashboard/profiles/{profileId}/restart': { path: { profileId: string }; response: DeploymentStartResponse };
   'POST /api/deployments/qc/jar': { body: JarDeploymentRequest; response: DeploymentStartResponse };
+  'GET /api/deployments/qc/jar/fetch-bat': { query: { applicationName: string }; response: JarBatFetchResponse };
   'GET /api/deployments/qc/jar/file-check': { query: { applicationName: string }; response: JarPreflightCheckResponse };
   'GET /api/deployments/qc/jar/snapshots': { query: { applicationName: string }; response: JarSnapshotSummary[] };
   'POST /api/deployments/qc/jar/rollback': { body: SnapshotRollbackRequest; response: DeploymentStartResponse };

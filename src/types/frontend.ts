@@ -30,6 +30,7 @@ export interface RuntimeActivityModel {
   serverLogAvailable?: boolean;
   offset?: number | null;
   applicationPort?: number | null;
+  javaExecutablePath?: string | null;
   managementPort?: number | null;
   servicePort?: number | null;
   readiness?: RuntimeReadiness | null;

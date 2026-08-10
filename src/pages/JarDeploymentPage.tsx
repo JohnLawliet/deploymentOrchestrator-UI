@@ -5,7 +5,7 @@ import { errorMessage } from '@/types/frontend';
 import { Loader2, Package, Rocket } from 'lucide-react';
 import FileBrowser from '@/components/FileBrowser';
 import SearchableProfileSelect from '@/components/SearchableProfileSelect';
-import { deployJar, getJars, getPortStatus, isLockConflict } from '@/lib/contractApi';
+import { deployJar, fetchJarBat, getJars, getPortStatus, isLockConflict } from '@/lib/contractApi';
 import { generatedJarCommand, isValidJarApplicationName, jarApplicationNameFromPath } from '@/lib/jarContract';
 import { isOperationTerminal } from '@/lib/operationProgress';
 import { normalizeRuntimeActivity, overlayRuntimeActivity } from '@/lib/runtimeActivity';
@@ -32,6 +32,10 @@ const normalized = (value: unknown) =>
   String(value || '')
     .trim()
     .toLocaleLowerCase();
+const frontendLauncherComments = (profile: FrontendProfileActivityModel | null | undefined) =>
+  profile
+    ? [`REM Frontend profile: ${profile.profileName}`, `REM Frontend document root: ${profile.documentRoot || 'Not configured'}`]
+    : [];
 
 export default function JarDeploymentPage() {
   const {
@@ -49,6 +53,10 @@ export default function JarDeploymentPage() {
   const [applicationSelection, setApplicationSelection] = useState<ApplicationSelection | null>(null);
   const [source, setSource] = useState<string[]>([]);
   const [provideScript, setProvideScript] = useState(false);
+  const [javaPath, setJavaPath] = useState('');
+  const [existingBat, setExistingBat] = useState('');
+  const [batLoading, setBatLoading] = useState(false);
+  const [batError, setBatError] = useState('');
   const [includeFrontend, setIncludeFrontend] = useState(false);
   const [frontendMode, setFrontendMode] = useState<FrontendMode>(null);
   const [frontendSources, setFrontendSources] = useState<string[]>([]);
@@ -125,7 +133,26 @@ export default function JarDeploymentPage() {
       !!selectedFrontend &&
       frontendSources.length > 0 &&
       (!reassociationRequired || confirmReassociation));
-  const launcherCommand = generatedJarCommand(trimmedApplicationName, port);
+  const reuseExistingLauncher = !provideScript;
+  const savedLauncherPort = activity?.applicationPort;
+  const savedJavaExecutablePath = activity?.javaExecutablePath;
+  const launcherCommand = generatedJarCommand(trimmedApplicationName, port, javaPath);
+  const launcherFrontend =
+    provideScript && includeFrontend && frontendMode === FRONTEND_MODES.REUSE
+      ? frontendAssociation
+      : provideScript && includeFrontend && frontendMode === FRONTEND_MODES.DEPLOY
+        ? selectedFrontend
+        : null;
+  const launcherPreview = [...(provideScript ? [launcherCommand] : [existingBat]), ...frontendLauncherComments(launcherFrontend)]
+    .filter(Boolean)
+    .join('\r\n');
+  const deploymentPort = provideScript ? port : String(savedLauncherPort ?? '');
+  const deploymentPortNumber = Number(deploymentPort);
+  const deploymentPortValid =
+    /^\d+$/.test(deploymentPort) &&
+    Number.isInteger(deploymentPortNumber) &&
+    deploymentPortNumber >= 1 &&
+    deploymentPortNumber <= 65535;
   const jarScopes: LockScope[] = [
     {
       resourceKey: `profile:${selected?.id || trimmedApplicationName}`,
@@ -133,10 +160,10 @@ export default function JarDeploymentPage() {
       profile: selected?.applicationName || trimmedApplicationName,
       mode: 'WRITE' as const,
     },
-    ...(portValid
+    ...(deploymentPortValid
       ? [
           {
-            resourceKey: `port:${portNumber}`,
+            resourceKey: `port:${deploymentPortNumber}`,
             section: 'JAR',
             profile: selected?.applicationName || trimmedApplicationName,
             mode: 'WRITE' as const,
@@ -177,11 +204,11 @@ export default function JarDeploymentPage() {
     setPortStatus(null);
     setPortCheckError('');
     setPortChecking(false);
-    if (!portValid || !applicationNameValid || !applicationCommitted) return undefined;
+    if (!deploymentPortValid || !applicationNameValid || !applicationCommitted) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setPortChecking(true);
-      getPortStatus(portNumber, trimmedApplicationName, controller.signal)
+      getPortStatus(deploymentPortNumber, trimmedApplicationName, controller.signal)
         .then((status) => {
           if (sequence === portRequestSequence.current && !controller.signal.aborted) setPortStatus(status);
         })
@@ -198,7 +225,41 @@ export default function JarDeploymentPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [portNumber, portValid, trimmedApplicationName, applicationNameValid, applicationCommitted, portRefresh, lastSystemEvent]);
+  }, [
+    deploymentPortNumber,
+    deploymentPortValid,
+    trimmedApplicationName,
+    applicationNameValid,
+    applicationCommitted,
+    portRefresh,
+    lastSystemEvent,
+  ]);
+
+  useEffect(() => {
+    if (provideScript || !selected || !applicationNameValid) {
+      setExistingBat('');
+      setBatError('');
+      setBatLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    setBatLoading(true);
+    setBatError('');
+    fetchJarBat(trimmedApplicationName, controller.signal)
+      .then((script) => {
+        if (!controller.signal.aborted) setExistingBat(script);
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) {
+          setExistingBat('');
+          setBatError(errorMessage(reason, 'Unable to fetch the existing launcher file.'));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setBatLoading(false);
+      });
+    return () => controller.abort();
+  }, [provideScript, selected, applicationNameValid, trimmedApplicationName]);
 
   useEffect(() => {
     if (selected?.id) reconcileResourceActivity(`JAR:${selected.id}`).catch(() => {});
@@ -264,7 +325,7 @@ export default function JarDeploymentPage() {
       !applicationCommitted ||
       !applicationNameValid ||
       !source[0] ||
-      !portValid ||
+      !deploymentPortValid ||
       portChecking ||
       !portStatus?.deploymentAllowed ||
       !frontendProfileValid ||
@@ -296,9 +357,14 @@ export default function JarDeploymentPage() {
         applicationName: trimmedApplicationName,
         ...(selected ? { catalogueJarId: selected.id } : {}),
         sourcePath: source[0],
-        port: portNumber,
+        launcher: provideScript
+          ? {
+              mode: 'GENERATE_AND_SAVE',
+              port: deploymentPortNumber,
+              javaExecutablePath: javaPath.trim() || null,
+            }
+          : { mode: 'REUSE_EXISTING' },
         ...(healthUrl.trim() ? { healthUrl: healthUrl.trim() } : {}),
-        ...(provideScript ? { script: { scriptLine: launcherCommand } } : {}),
         frontend,
       });
       if (!operation?.deploymentId) throw new Error('The backend did not return a deployment ID.');
@@ -333,7 +399,8 @@ export default function JarDeploymentPage() {
     !applicationCommitted ||
     !applicationNameValid ||
     !source[0] ||
-    !portValid ||
+    !deploymentPortValid ||
+    (reuseExistingLauncher && (!selected || batLoading || !!batError || !existingBat)) ||
     portChecking ||
     !portStatus?.deploymentAllowed ||
     !frontendProfileValid ||
@@ -369,7 +436,7 @@ export default function JarDeploymentPage() {
                 </p>
               )}
             </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 md:items-end">
               <Field label="Application name (required)">
                 <Input
                   readOnly
@@ -379,28 +446,21 @@ export default function JarDeploymentPage() {
                   disabled={submitting || !!pendingOperationId}
                 />
               </Field>
-              <Field label="Port number (required)">
-                <Input
-                  type="number"
-                  min="1"
-                  max="65535"
-                  step="1"
-                  required
-                  value={port}
-                  onChange={(event) => setPort(event.target.value)}
-                  onBlur={() => setPortTouched(true)}
-                />
-              </Field>
-              <div className="md:col-span-2 xl:col-span-1">
-                <Field label="Health URL (optional)">
-                  <Input
-                    value={healthUrl}
-                    onChange={(event) => setHealthUrl(event.target.value)}
-                    placeholder="https://application.example/actuator/health"
-                  />
-                </Field>
-              </div>
+              <Choice
+                label="Provide launcher settings?"
+                value={provideScript}
+                onChange={setProvideScript}
+                yes="Yes, include launcher settings"
+                no="No, use backend defaults"
+              />
             </div>
+            <Field label="Health URL (optional)">
+              <Input
+                value={healthUrl}
+                onChange={(event) => setHealthUrl(event.target.value)}
+                placeholder="https://application.example/actuator/health"
+              />
+            </Field>
             {source[0] && (!applicationNameValid || !applicationCommitted) && (
               <Notice tone="error">
                 {!applicationNameValid
@@ -408,7 +468,7 @@ export default function JarDeploymentPage() {
                   : 'Unable to derive a valid application name from the selected JAR.'}
               </Notice>
             )}
-            {portTouched && !portValid && (
+            {provideScript && portTouched && !portValid && (
               <Notice tone="error">{port === '' ? 'Port is required.' : 'Port must be a whole number from 1 to 65535.'}</Notice>
             )}
             {!catalogueLoading && !jars.length && !catalogueError && (
@@ -443,7 +503,9 @@ export default function JarDeploymentPage() {
               </Notice>
             )}
             {selected && <JarFrontendDetails activity={activity} />}
-            {portValid && applicationCommitted && portChecking && <Notice>Checking port {portNumber}...</Notice>}
+            {deploymentPortValid && applicationCommitted && portChecking && (
+              <Notice>Checking port {deploymentPortNumber}...</Notice>
+            )}
             {portCheckError && (
               <Notice tone="error">
                 Port check failed: {portCheckError}. Deployment is disabled until the port can be verified.
@@ -461,17 +523,61 @@ export default function JarDeploymentPage() {
                 {portStatus.jarName ? `JAR: ${portStatus.jarName}. ` : ''}Free this port before deploying.
               </Notice>
             )}
-            <Choice
-              label="Provide launcher settings?"
-              value={provideScript}
-              onChange={setProvideScript}
-              yes="Yes, include launcher settings"
-              no="No, use backend defaults"
-            />
+            <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+              <Field label={provideScript ? 'Launcher script to save alongside the JAR' : 'Existing launcher script'}>
+                <textarea
+                  className="form-control min-h-28 font-mono text-sm"
+                  readOnly
+                  aria-label="Launcher script preview"
+                  value={launcherPreview}
+                  placeholder={
+                    applicationCommitted
+                      ? 'Loading the existing launcher script…'
+                      : 'Select a JAR to preview the launcher script.'
+                  }
+                />
+              </Field>
+              {provideScript ? (
+                <p className="help">This script will be saved as {trimmedApplicationName || 'application'}.bat.</p>
+              ) : (
+                <p className="help">
+                  The existing {trimmedApplicationName || 'application'}.bat will be reused; this preview is read-only.
+                  {savedJavaExecutablePath ? ` Saved Java path: ${savedJavaExecutablePath}.` : ''}
+                </p>
+              )}
+              {batLoading && <p className="help">Loading the existing launcher file…</p>}
+              {batError && <Notice tone="error">{batError}</Notice>}
+              {reuseExistingLauncher && applicationCommitted && !selected && (
+                <Notice tone="error">
+                  No saved launcher is available for this new JAR. Generate and save launcher settings first.
+                </Notice>
+              )}
+              {reuseExistingLauncher && selected && !batLoading && !batError && !deploymentPortValid && (
+                <Notice tone="error">
+                  This JAR profile has no saved launcher port. Generate and save launcher settings before reusing it.
+                </Notice>
+              )}
+            </div>
             {provideScript && (
-              <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-                <Field label="Generated launcher command">
-                  <textarea className="form-control min-h-20 font-mono text-sm" readOnly value={launcherCommand} />
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Port number (required)">
+                  <Input
+                    type="number"
+                    min="1"
+                    max="65535"
+                    step="1"
+                    required
+                    value={port}
+                    onChange={(event) => setPort(event.target.value)}
+                    onBlur={() => setPortTouched(true)}
+                  />
+                </Field>
+                <Field label="Java path in QC (optional)">
+                  <Input
+                    value={javaPath}
+                    onChange={(event) => setJavaPath(event.target.value)}
+                    placeholder="C:\\Program Files\\Java\\jdk-21\\bin\\java.exe"
+                  />
                 </Field>
               </div>
             )}
@@ -524,7 +630,9 @@ export default function JarDeploymentPage() {
                   </Notice>
                 )}
                 {frontendMode === FRONTEND_MODES.REUSE && selected && !frontendAssociation && (
-                  <Notice tone="error">No frontend associated with this JAR</Notice>
+                  <Notice tone="error">
+                    JAR wasn't associated with frontend during deployment. Redeploy with frontend setup.
+                  </Notice>
                 )}
                 {frontendMode === FRONTEND_MODES.DEPLOY && (
                   <div className="space-y-4">
