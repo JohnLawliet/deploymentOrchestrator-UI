@@ -676,12 +676,12 @@ export default function TablesPage() {
         </div>
       )}
       {metadata && metadata.length > 0 && (
-        <div className="grid gap-4" style={{ gridTemplateColumns: 'var(--tables-list-width, 120px) minmax(0, 1fr)' }}>
-          <Card className="min-w-0 self-start">
+        <div className="min-w-0 space-y-4" data-testid="tables-page-layout">
+          <Card className="min-w-0">
             <CardHeader className="p-3">
               <CardTitle className="text-sm">Tables</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-1 p-2 pt-0">
+            <CardContent className="flex flex-wrap gap-2 p-3 pt-0" data-testid="tables-selector">
               {metadata.map((item) => {
                 const readable = item.permissions.read === true;
                 return (
@@ -691,7 +691,7 @@ export default function TablesPage() {
                     disabled={!readable}
                     title={readable ? item.description : 'You do not have permission to read this table.'}
                     onClick={() => selectTable(item)}
-                    className={`flex w-full items-center gap-1.5 rounded-md border px-2 py-2 text-left text-xs transition-colors ${
+                    className={`flex min-w-40 flex-1 items-center gap-1.5 rounded-md border px-2 py-2 text-left text-xs transition-colors ${
                       selectedName === item.name
                         ? 'border-primary/30 bg-primary/10 text-primary'
                         : readable
@@ -700,7 +700,7 @@ export default function TablesPage() {
                     }`}
                   >
                     {!readable && <Lock className="h-3 w-3 shrink-0" />}
-                    <span className="truncate">{item.label}</span>
+                    <span className="min-w-0 break-words">{item.label}</span>
                   </button>
                 );
               })}

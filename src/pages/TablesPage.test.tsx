@@ -297,6 +297,36 @@ describe('TablesPage metadata-driven queries', () => {
     expect(screen.getByText('Query results: Deployment detail')).toBeVisible();
   });
 
+  it('renders a full-width, wrapping table selector and loads the selected table', async () => {
+    const longLabelDescriptor = {
+      ...deploymentRecordsDescriptor,
+      name: 'deployment-history',
+      label: 'Deployment History Archive',
+    };
+    api.getDatabaseTables.mockResolvedValue([latestProfileDescriptor, longLabelDescriptor]);
+    api.getDatabaseTableRows.mockImplementation((table: string) =>
+      Promise.resolve(table === 'latest-profile-deployments' ? latestProfilePage : basePage),
+    );
+    const user = userEvent.setup();
+    render(<TablesPage />);
+
+    const layout = await screen.findByTestId('tables-page-layout');
+    const selector = screen.getByTestId('tables-selector');
+    const historyButton = screen.getByRole('button', { name: 'Deployment History Archive' });
+
+    expect(layout).toHaveClass('space-y-4');
+    expect(selector).toHaveClass('flex', 'flex-wrap');
+    expect(historyButton).toHaveClass('min-w-40');
+    expect(historyButton.querySelector('span')).toHaveClass('break-words');
+
+    await user.click(historyButton);
+
+    await waitFor(() => {
+      expect(api.getDatabaseTableRows).toHaveBeenLastCalledWith('deployment-history', 0, 50, expect.any(AbortSignal));
+    });
+    expect(screen.getByText('Deployment History Archive', { selector: 'h3' })).toBeVisible();
+  });
+
   it('uses the revised latest-profile fields and opens the linked deployment detail', async () => {
     api.getDatabaseTables.mockResolvedValue([latestProfileDescriptor, deploymentRecordsDescriptor]);
     api.getDatabaseTableRows.mockImplementation((table: string) =>

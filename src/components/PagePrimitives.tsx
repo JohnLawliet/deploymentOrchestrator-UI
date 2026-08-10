@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 export function Page({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
-    <div className="p-5 md:p-8 max-w-7xl mx-auto">
+    <div className="p-5 md:p-8 max-w-8xl mx-auto">
       <div className="mb-7">
         <h1 className="text-2xl font-bold">{title}</h1>
         <p className="text-sm text-muted-foreground mt-1">{description}</p>

@@ -87,6 +87,51 @@ describe('FileBrowser selectableType', () => {
     expect(screen.getByRole('button', { name: 'nested' })).toBeDisabled();
   });
 
+  it('filters current-directory files and folders from the header dropdown', async () => {
+    listFiles.mockResolvedValue([
+      { name: 'archive', type: 'directory' },
+      { name: 'release.war', type: 'file', size: 100 },
+    ]);
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await screen.findByLabelText('Select archive');
+    await user.click(screen.getByRole('combobox', { name: 'Filter files and folders' }));
+
+    expect(screen.getByRole('option', { name: /archive/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /release\.war/i })).toBeInTheDocument();
+
+    const input = screen.getByLabelText('Filter files and folders by name');
+    await user.type(input, 'release');
+
+    expect(screen.queryByLabelText('Select archive')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Select release.war')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('option', { name: /release\.war/i }));
+    expect(screen.getByLabelText('Select release.war')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('combobox', { name: 'Filter files and folders' }));
+    await user.click(screen.getByRole('option', { name: /clear selection/i }));
+    expect(screen.getByLabelText('Select archive')).toBeInTheDocument();
+    expect(screen.getByLabelText('Select release.war')).toBeInTheDocument();
+  });
+
+  it('clears the filter when navigating into another directory', async () => {
+    listFiles
+      .mockResolvedValueOnce([{ name: 'nested', type: 'directory' }])
+      .mockResolvedValueOnce([{ name: 'child.txt', type: 'file' }]);
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await screen.findByLabelText('Select nested');
+    await user.click(screen.getByRole('combobox', { name: 'Filter files and folders' }));
+    await user.type(screen.getByLabelText('Filter files and folders by name'), 'nested');
+    await user.click(screen.getByRole('button', { name: 'nested' }));
+
+    expect(await screen.findByLabelText('Select child.txt')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Filter files and folders' })).toHaveTextContent('Filter files...');
+  });
+
   it('selects all eligible visible files and directories while preserving earlier selections', async () => {
     listFiles.mockResolvedValue([
       { name: 'nested', type: 'directory' },

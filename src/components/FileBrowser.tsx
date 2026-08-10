@@ -15,6 +15,7 @@ import {
 import { deleteFiles, listFiles } from '@/lib/contractApi';
 import { Button } from '@/components/ui/button';
 import LockNotice from '@/components/LockNotice';
+import SearchableProfileSelect from '@/components/SearchableProfileSelect';
 import { useOptionalPortal } from '@/context/PortalContext';
 import { errorMessage } from '@/types/frontend';
 import type { FileNode, RootKey } from '@/types/api-contracts';
@@ -55,6 +56,7 @@ export default function FileBrowser({
   const [actionError, setActionError] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [fileNameFilter, setFileNameFilter] = useState('');
   const knownEntries = useRef(new Map<string, FileNode>());
 
   const load = useCallback(
@@ -77,6 +79,7 @@ export default function FileBrowser({
 
   useEffect(() => {
     knownEntries.current.clear();
+    setFileNameFilter('');
   }, [rootKey]);
   useEffect(() => {
     const controller = new AbortController();
@@ -84,6 +87,11 @@ export default function FileBrowser({
     return () => controller.abort();
   }, [load, refresh, refreshToken]);
   const crumbs = useMemo(() => (path === '.' ? [] : path.split('/')), [path]);
+  const filteredEntries = useMemo(() => {
+    const normalizedFilter = fileNameFilter.trim().toLocaleLowerCase();
+    if (!normalizedFilter) return entries;
+    return entries.filter((entry) => entry.name.toLocaleLowerCase().includes(normalizedFilter));
+  }, [entries, fileNameFilter]);
   const interactionDisabled = disabled || deleting;
   const supportsDelete = rootKey === 'techDrive' || rootKey === 'qc';
   const deleteLock = supportsDelete ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
@@ -110,6 +118,7 @@ export default function FileBrowser({
   });
   const navigateCrumb = (index: number) => {
     setActionError('');
+    setFileNameFilter('');
     setPath(index < 0 ? '.' : crumbs.slice(0, index + 1).join('/'));
   };
   const toggle = (relative: string, entry: FileNode) => {
@@ -190,7 +199,24 @@ export default function FileBrowser({
             </span>
           ))}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center justify-end gap-1 flex-wrap">
+          <SearchableProfileSelect<FileNode>
+            profiles={entries}
+            value={fileNameFilter}
+            onValueChange={setFileNameFilter}
+            onSelect={(entry) => setFileNameFilter(entry.name)}
+            getKey={(entry) => joinRelative(path, entry.name)}
+            getLabel={(entry) => entry.name}
+            getDescription={(entry) => (entry.type === 'directory' ? 'Folder' : 'File')}
+            getSearchText={(entry) => entry.name}
+            ariaLabel="Filter files and folders"
+            inputAriaLabel="Filter files and folders by name"
+            placeholder="Filter files..."
+            inputPlaceholder="Type a file or folder name..."
+            groupLabel="Files and folders"
+            className="w-44 justify-between font-normal sm:w-56"
+            disabled={interactionDisabled || loading || !!error}
+          />
           {showSelectAll && supportsDelete && (
             <Button
               type="button"
@@ -259,9 +285,12 @@ export default function FileBrowser({
       {!loading && !error && entries.length === 0 && (
         <div className="py-10 text-center text-sm text-muted-foreground">This directory is empty.</div>
       )}
+      {!loading && !error && entries.length > 0 && filteredEntries.length === 0 && (
+        <div className="py-10 text-center text-sm text-muted-foreground">No matching files or folders.</div>
+      )}
       {!loading &&
         !error &&
-        entries.map((entry) => {
+        filteredEntries.map((entry) => {
           const relative = joinRelative(path, entry.name);
           const { isDirectory, selectionAllowed } = entryDetails(entry);
           const visuallyAllowed = isDirectory || selectionAllowed;
@@ -285,6 +314,7 @@ export default function FileBrowser({
                 onClick={() => {
                   if (isDirectory) {
                     setActionError('');
+                    setFileNameFilter('');
                     setPath(relative);
                   }
                 }}
