@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
+  getWarSnapshots: vi.fn(),
   isLockConflict: vi.fn(() => false),
   rollbackWar: vi.fn(),
 }));
@@ -21,6 +22,7 @@ import RollbackButton from './RollbackButton';
 
 describe('RollbackButton', () => {
   beforeEach(() => {
+    api.getWarSnapshots.mockReset();
     api.rollbackWar.mockReset();
     portal.operations = {};
     portal.registerOperation.mockReset();
@@ -32,18 +34,24 @@ describe('RollbackButton', () => {
     vi.restoreAllMocks();
   });
 
-  it('is unavailable without a current backend snapshot ID', () => {
-    render(<RollbackButton profileId="profile-1" profileName="coinDCX" backupSnapshotId={null} />);
-
-    expect(screen.getByRole('button', { name: /Rollback to previous version/i })).toBeDisabled();
-  });
-
-  it('starts rollback with the current backend snapshot ID and registers its operation', async () => {
-    api.rollbackWar.mockResolvedValue({ operationId: 'rollback-operation', status: 'STARTING' });
+  it('reports when a profile has no rollback snapshots', async () => {
+    api.getWarSnapshots.mockResolvedValue([]);
     const user = userEvent.setup();
-    render(<RollbackButton profileId="profile-1" profileName="coinDCX" backupSnapshotId={42} />);
+    render(<RollbackButton profileId="profile-1" profileName="coinDCX" />);
 
     await user.click(screen.getByRole('button', { name: /Rollback to previous version/i }));
+    expect(await screen.findByText("Profile doesn't have rollback snapshots.")).toBeVisible();
+    expect(api.getWarSnapshots).toHaveBeenCalledWith('profile-1');
+  });
+
+  it('lists snapshots and starts rollback from the selected entry', async () => {
+    api.getWarSnapshots.mockResolvedValue([{ snapshotId: 42, createdAt: '2026-08-12T10:00:00Z' }]);
+    api.rollbackWar.mockResolvedValue({ operationId: 'rollback-operation', status: 'STARTING' });
+    const user = userEvent.setup();
+    render(<RollbackButton profileId="profile-1" profileName="coinDCX" />);
+
+    await user.click(screen.getByRole('button', { name: /Rollback to previous version/i }));
+    await user.click(await screen.findByRole('button', { name: /42/ }));
 
     await waitFor(() => {
       expect(api.rollbackWar).toHaveBeenCalledWith(42);

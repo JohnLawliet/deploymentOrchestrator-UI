@@ -66,4 +66,13 @@ describe('JarRollbackButton', () => {
       'Rollback JAR · orders',
     );
   });
+
+  it('reports when the application has no rollback snapshots', async () => {
+    api.getJarSnapshots.mockResolvedValueOnce([]);
+    const user = userEvent.setup();
+    render(<JarRollbackButton resourceId="opaque-uuid" applicationName="orders" />);
+
+    await user.click(screen.getByRole('button', { name: 'Rollback JAR' }));
+    expect(await screen.findByText("Profile doesn't have rollback snapshots.")).toBeVisible();
+  });
 });

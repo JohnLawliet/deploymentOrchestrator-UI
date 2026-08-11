@@ -121,7 +121,9 @@ export default function JarRollbackButton({
             {error}
           </p>
         )}
-        {state === 'ready' && !sortedSnapshots.length && <p className="p-2 text-sm text-muted-foreground">No snapshots found</p>}
+        {state === 'ready' && !sortedSnapshots.length && (
+          <p className="p-2 text-sm text-muted-foreground">Profile doesn't have rollback snapshots.</p>
+        )}
         {state === 'ready' && sortedSnapshots.length > 0 && (
           <div className="max-h-72 overflow-auto">
             <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto_auto] gap-3 border-b px-2 py-1 text-xs font-medium text-muted-foreground">

@@ -329,13 +329,7 @@ export default function PortalDashboardPage() {
                       <RollbackButton
                         profileId={profile.id}
                         profileName={profile.name}
-                        disabled={
-                          typeof activity.backupSnapshotId !== 'number' ||
-                          submitting === key ||
-                          busyStates.has(activity.status ?? '') ||
-                          !!profileLock
-                        }
-                        backupSnapshotId={activity.backupSnapshotId}
+                        disabled={submitting === key || busyStates.has(activity.status ?? '') || !!profileLock}
                       />
                     </div>
                   </ActivityCard>
@@ -395,8 +389,6 @@ export default function PortalDashboardPage() {
                   jarName: jar.jarName,
                   status: jar.status,
                   health: jar.health,
-                  hasBackup: jar.hasBackup,
-                  backupSnapshotId: jar.backupSnapshotId,
                 };
                 const liveActivity = jarProfileActivityMap[jar.id || ''];
                 const activity = overlayRuntimeActivity(initialActivity, liveActivity);
@@ -473,9 +465,7 @@ export default function PortalDashboardPage() {
                     <JarRollbackButton
                       resourceId={jar.id}
                       applicationName={activity.applicationName || jar.applicationName}
-                      disabled={
-                        activity.hasBackup !== true || submitting === key || busyStates.has(activity.status ?? '') || !!jarLock
-                      }
+                      disabled={submitting === key || busyStates.has(activity.status ?? '') || !!jarLock}
                     />
                   </ActivityCard>
                 );

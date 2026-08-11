@@ -387,7 +387,7 @@ describe('JarDeploymentPage port contract', () => {
     );
   });
 
-  it('reuses an authoritative frontend association from an explicitly selected catalogue JAR', async () => {
+  it('reuses an authoritative frontend association without rendering selected-JAR frontend details', async () => {
     api.getJars.mockResolvedValue({
       jars: [
         {
@@ -412,8 +412,8 @@ describe('JarDeploymentPage port contract', () => {
     await user.type(screen.getByLabelText('Port number (required)'), '8087');
     await waitForAvailablePort();
 
-    expect(screen.getByText('orders-target.jar')).toBeVisible();
-    expect(screen.getByText(/Mary/)).toBeVisible();
+    expect(screen.queryByText('orders-target.jar')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Mary/)).not.toBeInTheDocument();
     await user.click(screen.getByLabelText('Include frontend'));
     await user.click(screen.getByLabelText('Use existing frontend association'));
     await user.click(screen.getByRole('button', { name: 'Deploy JAR' }));
@@ -560,7 +560,7 @@ describe('JarDeploymentPage port contract', () => {
     }
   });
 
-  it('renders associated frontend details for the selected JAR', async () => {
+  it('does not render associated frontend details for the selected JAR', async () => {
     portal.jarProfileActivityMap = {
       orders: {
         id: 'orders',
@@ -585,17 +585,14 @@ describe('JarDeploymentPage port contract', () => {
     render(<JarDeploymentPage />);
     await selectExistingJar(user);
 
-    expect(await screen.findByText('orders-ui')).toBeVisible();
-    expect(screen.getByRole('link', { name: 'https://fallback.example/orders' })).toBeVisible();
-    expect(screen.getByText('/srv/www/orders')).toBeVisible();
-    expect(screen.getByText('Missing')).toBeVisible();
-    expect(screen.getByText('NOT_FUNCTIONAL')).toBeVisible();
-    expect(screen.getByText('DocumentRoot is missing.')).toBeVisible();
-    expect(screen.getByText('Inactive')).toBeVisible();
+    expect(screen.queryByText('orders-ui')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'https://fallback.example/orders' })).not.toBeInTheDocument();
+    expect(screen.queryByText('/srv/www/orders')).not.toBeInTheDocument();
+    expect(screen.queryByText('DocumentRoot is missing.')).not.toBeInTheDocument();
     expect(portal.reconcileResourceActivity).toHaveBeenCalledWith('JAR:orders');
   });
 
-  it('treats incomplete frontend data as no authoritative association', async () => {
+  it('does not render incomplete frontend details for the selected JAR', async () => {
     portal.jarProfileActivityMap = {
       orders: {
         id: 'orders',
@@ -611,8 +608,8 @@ describe('JarDeploymentPage port contract', () => {
     await selectExistingJar(user);
 
     expect(
-      await screen.findByText("JAR wasn't associated with frontend during deployment. Redeploy with frontend setup"),
-    ).toBeVisible();
+      screen.queryByText("JAR wasn't associated with frontend during deployment. Redeploy with frontend setup"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'https://orders.example' })).not.toBeInTheDocument();
   });
 });

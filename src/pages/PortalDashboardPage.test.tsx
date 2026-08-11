@@ -305,7 +305,7 @@ describe('PortalDashboardPage profile contract', () => {
     expect(api.restartJar).toHaveBeenCalledWith('Orders');
   });
 
-  it('disables rollback until the backend reports a backup for each profile type', async () => {
+  it('keeps rollback available when legacy backup metadata is absent', async () => {
     api.getProfiles.mockResolvedValue([{ ...profile, hasBackup: false, backupSnapshotId: null }]);
     api.getJars.mockResolvedValue({
       domain: 'http://127.0.0.1',
@@ -324,10 +324,10 @@ describe('PortalDashboardPage profile contract', () => {
     render(<PortalDashboardPage />);
 
     expect(await screen.findByText('payments-qc')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Rollback to previous version' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Rollback JAR' })).toBeDisabled();
-    expect(rollback.props).toMatchObject({ disabled: true });
-    expect(jarRollback.props).toMatchObject({ disabled: true });
+    expect(screen.getByRole('button', { name: 'Rollback to previous version' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Rollback JAR' })).toBeEnabled();
+    expect(rollback.props).toMatchObject({ disabled: false });
+    expect(jarRollback.props).toMatchObject({ disabled: false });
   });
 
   it('paginates filtered WildFly cards using the configured page size', async () => {

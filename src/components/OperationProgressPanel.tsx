@@ -67,15 +67,8 @@ const rollbackDetails = (value: unknown): { rollbackResult?: string; rollbackMes
 };
 
 export default function OperationProgressPanel() {
-  const {
-    viewingOperation,
-    setViewingOperation,
-    operations,
-    reconcileResourceActivity,
-    wildflyProfileActivityMap = {},
-    profileLogLines,
-    clearProfileLogs,
-  } = usePortal();
+  const { viewingOperation, setViewingOperation, operations, reconcileResourceActivity, profileLogLines, clearProfileLogs } =
+    usePortal();
   const [record, setRecord] = useState<DeploymentRecord | null>(null);
   const [actionState, setActionState] = useState('');
   const [actionError, setActionError] = useState('');
@@ -156,15 +149,6 @@ export default function OperationProgressPanel() {
     () => (jarOutput ? jarOutputLines : profileLogLines?.[profileId] || []),
     [jarOutput, jarOutputLines, profileLogLines, profileId],
   );
-  const profileSnapshotId = wildflyProfileActivityMap[profileId]?.backupSnapshotId;
-  const backupSnapshotId =
-    typeof profileSnapshotId === 'number'
-      ? profileSnapshotId
-      : typeof live?.backupSnapshotId === 'number'
-        ? live.backupSnapshotId
-        : typeof viewingOperation?.backupSnapshotId === 'number'
-          ? viewingOperation.backupSnapshotId
-          : null;
   const showFailedWarLog = warDeployment && deploymentFailed && live?.logAvailable === true;
   const showJarLog = resourceType === 'JAR' && (jarOutput || live?.logAvailable === true);
   const showSuccessfulWarActions =
@@ -413,8 +397,7 @@ export default function OperationProgressPanel() {
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           {phaseCode && (
             <span>
-              Phase:{' '}
-              <strong className="text-foreground">{qcWarPhaseLabel(phaseCode) || phaseCode}</strong>{' '}
+              Phase: <strong className="text-foreground">{qcWarPhaseLabel(phaseCode) || phaseCode}</strong>{' '}
               <span className="font-mono">({phaseCode})</span>
             </span>
           )}
@@ -432,7 +415,10 @@ export default function OperationProgressPanel() {
           <p className="text-sm text-red-700">{operationProgress.rollbackFailureMessage}</p>
         )}
         {warDeployment && (
-          <ol className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3" aria-label="QC WAR deployment timeline">
+          <ol
+            className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
+            aria-label="QC WAR deployment timeline"
+          >
             {QC_WAR_TIMELINE.map((step, index) => {
               const current = currentPhase?.timelineId === step.id;
               return (
@@ -500,12 +486,7 @@ export default function OperationProgressPanel() {
                   )}
                   {actionState === 'stopping' ? 'Stopping…' : 'Stop profile'}
                 </Button>
-                <RollbackButton
-                  profileId={profileId}
-                  profileName={record?.profile || profileId}
-                  backupSnapshotId={backupSnapshotId}
-                  disabled={!!actionState || backupSnapshotId === null}
-                />
+                <RollbackButton profileId={profileId} profileName={record?.profile || profileId} disabled={!!actionState} />
               </>
             )}
           </div>

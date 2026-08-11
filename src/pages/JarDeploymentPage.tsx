@@ -502,7 +502,7 @@ export default function JarDeploymentPage() {
                 available.
               </Notice>
             )}
-            {selected && <JarFrontendDetails activity={activity} />}
+
             {deploymentPortValid && applicationCommitted && portChecking && (
               <Notice>Checking port {deploymentPortNumber}...</Notice>
             )}
