@@ -34,6 +34,24 @@ const operationRecord = (overrides: Partial<OperationRecord> = {}): OperationRec
 });
 
 describe('lifecycle activity reduction', () => {
+  it('retains the recovered active state for an automatic rollback operation', () => {
+    const record = mergeOperationEventRecord(
+      operationRecord({
+        deploymentId: 'deployment-1',
+        progress: { rollbackState: 'RESTORING' } as OperationRecord['progress'],
+      }),
+      systemEvent({
+        eventType: 'RESOURCE_ACTIVE',
+        deploymentId: 'deployment-1',
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+        state: 'ACTIVE',
+        resources: null,
+      }),
+    );
+
+    expect(record).toMatchObject({ restoredResourceState: 'ACTIVE', state: 'ACTIVE' });
+  });
+
   it('marks WildFly server logs available without attaching a terminal', () => {
     const initial = {
       'profile-1': profile,

@@ -471,7 +471,7 @@ export default function JarDeploymentPage() {
             {provideScript && portTouched && !portValid && (
               <Notice tone="error">{port === '' ? 'Port is required.' : 'Port must be a whole number from 1 to 65535.'}</Notice>
             )}
-            {!catalogueLoading && !jars.length && !catalogueError && (
+            {!catalogueLoading && !jars.length && !catalogueError && !source[0] && (
               <Notice>
                 No existing JAR applications were returned. Select a JAR from Tech Drive to derive the application name.
               </Notice>

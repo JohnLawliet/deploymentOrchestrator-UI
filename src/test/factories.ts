@@ -94,6 +94,7 @@ export const jarProfileActivity = (overrides: Partial<JarProfileActivity> = {}):
   terminalDeploymentId: null,
   jarName: 'test-app.jar',
   applicationPort: 8081,
+  javaExecutablePath: null,
   healthUrl: null,
   healthReason: null,
   readiness: 'NOT_VERIFIED',
@@ -107,6 +108,8 @@ export const jarProfileActivity = (overrides: Partial<JarProfileActivity> = {}):
   lastResult: null,
   frontendProfile: null,
   terminalAvailable: false,
+  hasBackup: false,
+  backupSnapshotId: null,
   ...overrides,
 });
 

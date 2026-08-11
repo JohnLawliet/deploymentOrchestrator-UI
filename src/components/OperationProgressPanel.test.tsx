@@ -1,10 +1,12 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { EventSourceMessage } from '@microsoft/fetch-event-source';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OperationMap, OperationRecord, ProfileLogMap } from '@/types/frontend';
 import { operationProgressState, operationRecord, profileLogEvent } from '@/test/factories';
 
 type MockFunction = ReturnType<typeof vi.fn>;
+type StreamOptions = { onmessage?: (message: EventSourceMessage) => void; signal: AbortSignal };
 type PortalMock = {
   clearProfileLogs: MockFunction;
   operations: OperationMap;
@@ -14,13 +16,17 @@ type PortalMock = {
   viewingOperation: OperationRecord | null;
 };
 
-const stream = vi.hoisted(() => ({ options: null }));
+const stream = vi.hoisted(() => ({ url: '', options: null as StreamOptions | null }));
 const api = vi.hoisted(() => ({
   downloadTerminal: vi.fn(),
   getOperation: vi.fn(),
+  resolvedTerminalEventUrl: vi.fn(
+    (url: string | null | undefined, deploymentId: string) => url || `/api/terminals/${deploymentId}/events`,
+  ),
   saveBlob: vi.fn(),
   stopProfile: vi.fn(),
   subscribeProfileLogs: vi.fn(),
+  techDriveHeaders: vi.fn(() => ({})),
   unsubscribeProfileLogs: vi.fn(),
 }));
 const portal = vi.hoisted((): PortalMock => ({
@@ -33,7 +39,8 @@ const portal = vi.hoisted((): PortalMock => ({
 }));
 
 vi.mock('@microsoft/fetch-event-source', () => ({
-  fetchEventSource: vi.fn((_url, options) => {
+  fetchEventSource: vi.fn((url, options) => {
+    stream.url = url;
     stream.options = options;
     return new Promise(() => {});
   }),
@@ -59,6 +66,7 @@ describe('OperationProgressPanel revised output contracts', () => {
     portal.setViewingOperation.mockReset();
     portal.viewingOperation = null;
     stream.options = null;
+    stream.url = '';
   });
 
   afterEach(cleanup);
@@ -110,11 +118,13 @@ describe('OperationProgressPanel revised output contracts', () => {
     expect(api.unsubscribeProfileLogs).toHaveBeenCalledTimes(1);
   });
 
-  it('never renders or connects to JAR command output and exposes an event-confirmed log', () => {
+  it('streams JAR terminal output for a selected dashboard deployment and closes it with the drawer', async () => {
     portal.viewingOperation = operationRecord({
       deploymentId: 'deployment-1',
       resourceType: 'JAR',
       resourceKey: 'JAR:orders',
+      outputRequested: true,
+      terminalEventsUrl: '/api/terminals/deployment-1/events',
     });
     portal.operations = {
       'deployment-1': {
@@ -129,14 +139,34 @@ describe('OperationProgressPanel revised output contracts', () => {
         }),
       },
     };
-    render(<OperationProgressPanel />);
+    const view = render(<OperationProgressPanel />);
 
-    expect(screen.queryByText('Command output')).not.toBeInTheDocument();
+    await waitFor(() => expect(stream.options).not.toBeNull());
+    const options = stream.options;
+    if (!options) throw new Error('Expected JAR terminal stream options.');
+    expect(stream.url).toContain('/api/terminals/deployment-1/events');
+    expect(screen.getByText('JAR output')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Download full log' })).toBeVisible();
     expect(screen.getByText('100%')).toBeInTheDocument();
     expect(screen.queryByText('80%')).not.toBeInTheDocument();
     expect(screen.queryByText('Phase:')).not.toBeInTheDocument();
-    expect(stream.options).toBeNull();
+
+    await act(async () => {
+      options.onmessage?.({
+        id: 'jar-output-1',
+        event: 'TERMINAL_OUTPUT',
+        data: JSON.stringify({
+          deploymentId: 'deployment-1',
+          timestamp: '2026-08-11T12:00:00Z',
+          line: 'JAR is ready',
+          replayed: true,
+        }),
+      });
+    });
+    expect(screen.getByText('JAR is ready')).toBeInTheDocument();
+
+    view.unmount();
+    expect(options.signal.aborted).toBe(true);
   });
 
   it('waits for DEPLOYMENT_LOG_AVAILABLE before showing a completed JAR download', () => {
@@ -280,5 +310,91 @@ describe('OperationProgressPanel revised output contracts', () => {
     expect(screen.getByText('Prepared deployment')).toBeInTheDocument();
     expect(screen.queryByText('Command output')).not.toBeInTheDocument();
     expect(stream.options).toBeNull();
+  });
+
+  it('shows automatic rollback as a failed deployment restored to an active profile and enables its retained log', async () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'failed-war-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      profileId: 'profile-1',
+      label: 'Deploy WAR · orders',
+    });
+    portal.operations = {
+      'failed-war-1': {
+        deploymentId: 'failed-war-1',
+        operationType: 'WAR_DEPLOY',
+        logAvailable: true,
+        restoredResourceState: 'ACTIVE',
+        progress: operationProgressState({
+          phaseCode: 'CLEANUP',
+          status: 'FAILED',
+          progressPercentage: 95,
+          message: 'Cleaning up staging files.',
+          deploymentOutcome: 'FAILED',
+          rollbackState: 'RESTORED',
+          failureMessage: 'WildFly deployment marker reported a missing dependency.',
+        }),
+      },
+    };
+    const user = userEvent.setup();
+    render(<OperationProgressPanel />);
+
+    expect(screen.getByText('Deployment failed. The previous deployment was restored and the profile is active.')).toBeVisible();
+    expect(screen.getByText('WildFly deployment marker reported a missing dependency.')).toBeVisible();
+    expect(screen.getByLabelText('QC WAR deployment timeline')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Download Logs' }));
+    expect(api.downloadTerminal).toHaveBeenCalledWith('failed-war-1');
+  });
+
+  it.each([
+    [403, 'You are not authorized to download this failed deployment log.'],
+    [404, 'No retained failure log is available for this deployment.'],
+    [409, 'The failure log is not ready yet. Try again shortly.'],
+  ])('explains failed WAR log download status %s', async (status, expected) => {
+    api.downloadTerminal.mockRejectedValueOnce(Object.assign(new Error('request failed'), { status }));
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'failed-war-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+    });
+    portal.operations = {
+      'failed-war-1': {
+        deploymentId: 'failed-war-1',
+        operationType: 'WAR_DEPLOY',
+        logAvailable: true,
+        progress: operationProgressState({ deploymentOutcome: 'FAILED', status: 'FAILED', phaseCode: 'FAILED' }),
+      },
+    };
+    const user = userEvent.setup();
+    render(<OperationProgressPanel />);
+
+    await user.click(screen.getByRole('button', { name: 'Download Logs' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+  });
+
+  it('marks a failed manual rollback as requiring manual recovery', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'rollback-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+    });
+    portal.operations = {
+      'rollback-1': {
+        deploymentId: 'rollback-1',
+        operationType: 'WAR_ROLLBACK',
+        progress: operationProgressState({
+          phaseCode: 'FAILED',
+          status: 'FAILED',
+          deploymentOutcome: 'FAILED',
+          rollbackState: 'FAILED',
+          rollbackFailureMessage: 'WAR rollback failed',
+        }),
+      },
+    };
+    render(<OperationProgressPanel />);
+
+    expect(screen.getByText('Rollback failed. Manual recovery is required.')).toBeVisible();
   });
 });

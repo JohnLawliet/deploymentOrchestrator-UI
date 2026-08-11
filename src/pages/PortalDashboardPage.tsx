@@ -1,5 +1,16 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, Eye, Loader2, Power, RefreshCw, RotateCcw, Server } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Eye,
+  Loader2,
+  Power,
+  RefreshCw,
+  RotateCcw,
+  Server,
+} from 'lucide-react';
 import { getJars, getProfiles, isLockConflict, restartJar, stopJar, startProfile, stopProfile } from '@/lib/contractApi';
 import { normalizeDashboardProfile, normalizeRuntimeActivity, overlayRuntimeActivity } from '@/lib/runtimeActivity';
 import { usePortal } from '@/context/PortalContext';
@@ -21,6 +32,11 @@ const readinessLabels = {
   HTTP_VERIFIED: 'Verified healthy',
   PORT_VERIFIED: 'Healthy — process and port verified',
 };
+const fallbackWildflyProfilesPerPage = 20;
+const configuredWildflyProfilesPerPage = (() => {
+  const value = Number(import.meta.env.VITE_WILDFLY_PROFILES_PER_PAGE);
+  return Number.isInteger(value) && value > 0 ? value : fallbackWildflyProfilesPerPage;
+})();
 
 export function shouldRefreshDashboardActivity(event: unknown): boolean {
   if (typeof event !== 'object' || event === null || !('eventType' in event)) return false;
@@ -57,6 +73,7 @@ export default function PortalDashboardPage() {
   const [version, setVersion] = useState('');
   const [profileQuery, setProfileQuery] = useState('');
   const [debouncedProfileQuery, setDebouncedProfileQuery] = useState('');
+  const [wildflyPage, setWildflyPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState('');
@@ -74,10 +91,25 @@ export default function PortalDashboardPage() {
       ),
     );
   }, [debouncedProfileQuery, versionProfiles]);
+  const wildflyPageCount = Math.max(1, Math.ceil(filteredProfiles.length / configuredWildflyProfilesPerPage));
+  const visibleProfiles = useMemo(
+    () =>
+      filteredProfiles.slice(
+        wildflyPage * configuredWildflyProfilesPerPage,
+        (wildflyPage + 1) * configuredWildflyProfilesPerPage,
+      ),
+    [filteredProfiles, wildflyPage],
+  );
+  const wildflyRangeStart = filteredProfiles.length ? wildflyPage * configuredWildflyProfilesPerPage + 1 : 0;
+  const wildflyRangeEnd = Math.min((wildflyPage + 1) * configuredWildflyProfilesPerPage, filteredProfiles.length);
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedProfileQuery(profileQuery), 400);
     return () => window.clearTimeout(timer);
   }, [profileQuery]);
+
+  useEffect(() => {
+    setWildflyPage(0);
+  }, [profiles, version, debouncedProfileQuery]);
 
   useEffect(() => {
     let disposed = false;
@@ -147,7 +179,8 @@ export default function PortalDashboardPage() {
       deploymentId: deploymentId || resourceKey,
       resourceKey,
       resourceType: resolvedResourceType,
-      ...(resolvedResourceType === 'WILDFLY_PROFILE' ? { profileId: activity.id, outputRequested: true } : {}),
+      ...(resolvedResourceType === 'WILDFLY_PROFILE' ? { profileId: activity.id } : {}),
+      outputRequested: true,
       ...(activity.status ? { status: activity.status } : {}),
       label,
     });
@@ -175,6 +208,7 @@ export default function PortalDashboardPage() {
     setVersion(nextVersion);
     setProfileQuery('');
     setDebouncedProfileQuery('');
+    setWildflyPage(0);
   };
 
   const changeProfileQuery = (nextQuery: string): void => {
@@ -185,6 +219,7 @@ export default function PortalDashboardPage() {
   const selectProfile = (profile: Profile): void => {
     setProfileQuery(profile.name);
     setDebouncedProfileQuery(profile.name);
+    setWildflyPage(0);
   };
 
   return (
@@ -233,7 +268,7 @@ export default function PortalDashboardPage() {
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {filteredProfiles.map((profile) => {
+              {visibleProfiles.map((profile) => {
                 const initialActivity = normalizeDashboardProfile(profile) ?? {
                   id: profile.id,
                   profileName: profile.name,
@@ -294,13 +329,51 @@ export default function PortalDashboardPage() {
                       <RollbackButton
                         profileId={profile.id}
                         profileName={profile.name}
-                        disabled={submitting === key || busyStates.has(activity.status ?? '') || !!profileLock}
+                        disabled={
+                          typeof activity.backupSnapshotId !== 'number' ||
+                          submitting === key ||
+                          busyStates.has(activity.status ?? '') ||
+                          !!profileLock
+                        }
+                        backupSnapshotId={activity.backupSnapshotId}
                       />
                     </div>
                   </ActivityCard>
                 );
               })}
             </div>
+            {filteredProfiles.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+                <span>
+                  Showing {wildflyRangeStart}–{wildflyRangeEnd} of {filteredProfiles.length} profiles
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    disabled={wildflyPage === 0}
+                    onClick={() => setWildflyPage((current) => Math.max(0, current - 1))}
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    Previous
+                  </Button>
+                  <span aria-label="WildFly profile page">
+                    Page {wildflyPage + 1} of {wildflyPageCount}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    disabled={wildflyPage >= wildflyPageCount - 1}
+                    onClick={() => setWildflyPage((current) => Math.min(wildflyPageCount - 1, current + 1))}
+                  >
+                    Next
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
             {!profiles.length ? (
               <p className="empty-state">No valid WildFly launchers were discovered.</p>
             ) : debouncedProfileQuery.trim() && !filteredProfiles.length ? (
@@ -322,6 +395,8 @@ export default function PortalDashboardPage() {
                   jarName: jar.jarName,
                   status: jar.status,
                   health: jar.health,
+                  hasBackup: jar.hasBackup,
+                  backupSnapshotId: jar.backupSnapshotId,
                 };
                 const liveActivity = jarProfileActivityMap[jar.id || ''];
                 const activity = overlayRuntimeActivity(initialActivity, liveActivity);
@@ -398,7 +473,9 @@ export default function PortalDashboardPage() {
                     <JarRollbackButton
                       resourceId={jar.id}
                       applicationName={activity.applicationName || jar.applicationName}
-                      disabled={submitting === key || busyStates.has(activity.status ?? '') || !!jarLock}
+                      disabled={
+                        activity.hasBackup !== true || submitting === key || busyStates.has(activity.status ?? '') || !!jarLock
+                      }
                     />
                   </ActivityCard>
                 );

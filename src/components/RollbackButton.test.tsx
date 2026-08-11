@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
-  getWarSnapshots: vi.fn(),
   isLockConflict: vi.fn(() => false),
   rollbackWar: vi.fn(),
 }));
@@ -22,7 +21,6 @@ import RollbackButton from './RollbackButton';
 
 describe('RollbackButton', () => {
   beforeEach(() => {
-    api.getWarSnapshots.mockReset();
     api.rollbackWar.mockReset();
     portal.operations = {};
     portal.registerOperation.mockReset();
@@ -34,28 +32,21 @@ describe('RollbackButton', () => {
     vi.restoreAllMocks();
   });
 
-  it('reports when a profile has no eligible snapshots', async () => {
-    api.getWarSnapshots.mockResolvedValue([]);
-    const user = userEvent.setup();
-    render(<RollbackButton profileId="profile-1" profileName="coinDCX" />);
+  it('is unavailable without a current backend snapshot ID', () => {
+    render(<RollbackButton profileId="profile-1" profileName="coinDCX" backupSnapshotId={null} />);
 
-    await user.click(screen.getByRole('button', { name: /Rollback to previous version/i }));
-
-    expect(await screen.findByText('No snapshots found')).toBeInTheDocument();
-    expect(api.getWarSnapshots).toHaveBeenCalledWith('profile-1');
+    expect(screen.getByRole('button', { name: /Rollback to previous version/i })).toBeDisabled();
   });
 
-  it('starts rollback for the selected snapshot and registers its operation', async () => {
-    api.getWarSnapshots.mockResolvedValue([{ snapshotId: 'snapshot-uuid', createdAt: '2026-07-26T13:24:11Z' }]);
+  it('starts rollback with the current backend snapshot ID and registers its operation', async () => {
     api.rollbackWar.mockResolvedValue({ operationId: 'rollback-operation', status: 'STARTING' });
     const user = userEvent.setup();
-    render(<RollbackButton profileId="profile-1" profileName="coinDCX" />);
+    render(<RollbackButton profileId="profile-1" profileName="coinDCX" backupSnapshotId={42} />);
 
     await user.click(screen.getByRole('button', { name: /Rollback to previous version/i }));
-    await user.click(await screen.findByRole('button', { name: /snapshot-uuid/i }));
 
     await waitFor(() => {
-      expect(api.rollbackWar).toHaveBeenCalledWith('snapshot-uuid');
+      expect(api.rollbackWar).toHaveBeenCalledWith(42);
     });
     expect(portal.registerOperation).toHaveBeenCalledWith(
       {

@@ -125,15 +125,62 @@ describe('operation progress canonical correlation', () => {
     expect(reduceOperationProgress(terminal, stale)).toBe(terminal);
   });
 
-  it('keeps a failed progress message terminal when later progress arrives', () => {
+  it('retains the failed deployment result while recording post-failure cleanup progress', () => {
     const failed = progressEvent('deployment-1');
     failed.message = 'Health verification timed out.';
     failed.resources = { ...failed.resources, status: 'FAILED', progressPercentage: 80 };
     const terminal = reduceOperationProgress({}, failed);
-    const stale = progressEvent('deployment-1');
-    stale.timestamp = '2026-07-28T10:01:00Z';
+    const cleanup = progressEvent('deployment-1');
+    cleanup.timestamp = '2026-07-28T10:01:00Z';
+    cleanup.message = 'Cleaning up deployment staging.';
+    cleanup.resources = { ...cleanup.resources, phaseCode: 'CLEANUP', status: 'FAILED', progressPercentage: 40 };
 
-    expect(reduceOperationProgress(terminal, stale)).toBe(terminal);
-    expect(terminal['deployment-1']?.progress?.message).toBe('Health verification timed out.');
+    const reduced = reduceOperationProgress(terminal, cleanup);
+    expect(reduced['deployment-1']?.progress).toMatchObject({
+      phaseCode: 'CLEANUP',
+      progressPercentage: 80,
+      deploymentOutcome: 'FAILED',
+      failureMessage: 'Health verification timed out.',
+    });
+  });
+
+  it('tracks automatic rollback and infers rollback failure from FAILED after rollback begins', () => {
+    const rollbackStarted = progressEvent('deployment-1');
+    rollbackStarted.resources = {
+      ...rollbackStarted.resources,
+      phaseCode: 'ROLLBACK_STARTED',
+      status: 'RESTARTING',
+      progressPercentage: 95,
+    };
+    rollbackStarted.message = 'WAR deployment failed; starting rollback';
+    const restoring = reduceOperationProgress({}, rollbackStarted);
+
+    const rollbackFailed = progressEvent('deployment-1');
+    rollbackFailed.timestamp = '2026-07-28T10:01:00Z';
+    rollbackFailed.resources = { ...rollbackFailed.resources, phaseCode: 'FAILED', status: 'FAILED', progressPercentage: null };
+    rollbackFailed.message = 'WAR deployment failed; ROLLBACK_FAILED: permission denied';
+    const failed = reduceOperationProgress(restoring, rollbackFailed);
+
+    expect(failed['deployment-1']?.progress).toMatchObject({
+      deploymentOutcome: 'FAILED',
+      rollbackState: 'FAILED',
+      rollbackFailureMessage: 'WAR deployment failed; ROLLBACK_FAILED: permission denied',
+      progressPercentage: 95,
+    });
+  });
+
+  it('marks manual rollback completion as a successful restoration at 100 percent', () => {
+    const started = progressEvent('rollback-1');
+    started.resources = { ...started.resources, phaseCode: 'ROLLBACK_STARTED', status: 'PREPARING', progressPercentage: 35 };
+    const restoring = reduceOperationProgress({}, started);
+    const complete = progressEvent('rollback-1');
+    complete.timestamp = '2026-07-28T10:01:00Z';
+    complete.resources = { ...complete.resources, phaseCode: 'COMPLETED', status: 'COMPLETED', progressPercentage: 100 };
+
+    expect(reduceOperationProgress(restoring, complete)['rollback-1']?.progress).toMatchObject({
+      deploymentOutcome: 'SUCCEEDED',
+      rollbackState: 'RESTORED',
+      progressPercentage: 100,
+    });
   });
 });

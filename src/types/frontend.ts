@@ -91,6 +91,11 @@ export interface OperationProgressState extends Omit<OperationProgress, 'status'
   revision: number;
   eventKeys: string[];
   steps: Array<Omit<OperationProgress, 'status'> & { status: string | null; timestamp: string; message: string | null }>;
+  deploymentOutcome?: 'SUCCEEDED' | 'FAILED' | null;
+  failureMessage?: string | null;
+  rollbackState?: 'RESTORING' | 'RESTORED' | 'FAILED' | null;
+  rollbackMessage?: string | null;
+  rollbackFailureMessage?: string | null;
 }
 
 export interface OperationRecord {
@@ -130,6 +135,7 @@ export interface OperationRecord {
   message?: string | null;
   state?: string | null;
   rollbackMessage?: string | null;
+  restoredResourceState?: 'ACTIVE' | 'INACTIVE' | null;
   progress?: OperationProgressState;
   resources?: SystemEvent['resources'];
 }

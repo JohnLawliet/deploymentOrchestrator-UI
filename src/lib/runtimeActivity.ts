@@ -154,6 +154,10 @@ export function normalizeRuntimeActivity(resource: RuntimeActivityInput): Wildfl
           frontendProfile,
           terminalDeploymentId: resource.terminalDeploymentId,
           terminalAvailable: resource.terminalAvailable,
+          hasBackup: resource.hasBackup,
+          backupSnapshotId: Object.prototype.hasOwnProperty.call(resource, 'backupSnapshotId')
+            ? resource.backupSnapshotId
+            : undefined,
         }
       : {
           profileName: resource.profileName ?? resource.displayName,
@@ -198,6 +202,8 @@ function normalizeJarProfileActivity(profile: JarProfileActivity): JarActivity {
     activeOperationId: profile.activeOperationId,
     terminalDeploymentId: profile.terminalDeploymentId,
     terminalAvailable: profile.terminalAvailable,
+    hasBackup: profile.hasBackup,
+    backupSnapshotId: profile.backupSnapshotId,
     applicationPort: profile.applicationPort,
     javaExecutablePath: profile.javaExecutablePath,
     healthUrl: profile.healthUrl,

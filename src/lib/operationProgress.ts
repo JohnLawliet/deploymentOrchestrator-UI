@@ -1,5 +1,6 @@
 import type { DeploymentStatus, OperationProgress, SystemEvent } from '@/types/api-contracts';
 import type { OperationMap, OperationProgressState, OperationRecord, OperationStatus } from '@/types/frontend';
+import { isFailureProgress } from './qcWarProgress';
 
 type OperationProgressEvent = Extract<SystemEvent, { eventType: 'OPERATION_PROGRESS' }>;
 type ProgressStep = Omit<OperationProgress, 'status'> & { status: string | null; timestamp: string; message: string | null };
@@ -40,7 +41,6 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const isNullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
 const isNullablePercentage = (value: unknown): value is number | null =>
   value === null || (typeof value === 'number' && Number.isFinite(value));
-const isDeploymentStatus = (value: string): value is DeploymentStatus => DEPLOYMENT_STATUSES.has(value as DeploymentStatus);
 const isTerminalDeploymentStatus = (value: string | null | undefined): boolean =>
   value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
 
@@ -119,9 +119,26 @@ export function reduceOperationProgress(operations: OperationMap, event: Operati
   if (previous?.eventKeys?.includes(key)) return operations;
 
   const supplied = event.resources;
-  if (isTerminalDeploymentStatus(previous?.status)) return operations;
-  const status = isDeploymentStatus(supplied.status) ? supplied.status : (previous?.status ?? null);
-  const progressPercentage = status === 'COMPLETED' ? 100 : (supplied.progressPercentage ?? previous?.progressPercentage ?? null);
+  if (previous?.deploymentOutcome === 'SUCCEEDED') return operations;
+  const status = supplied.status || previous?.status || null;
+  const progressPercentage =
+    supplied.phaseCode === 'COMPLETED' || status === 'COMPLETED'
+      ? 100
+      : supplied.progressPercentage === null
+        ? (previous?.progressPercentage ?? null)
+        : Math.max(previous?.progressPercentage ?? 0, supplied.progressPercentage);
+  const failure = isFailureProgress(supplied);
+  const rollbackStarted = supplied.phaseCode === 'ROLLBACK_STARTED';
+  const rollbackCompleted = supplied.phaseCode === 'ROLLBACK_COMPLETED';
+  const rollbackState = rollbackStarted
+    ? 'RESTORING'
+    : rollbackCompleted || (supplied.phaseCode === 'COMPLETED' && previous?.rollbackState === 'RESTORING')
+      ? 'RESTORED'
+      : failure && previous?.rollbackState === 'RESTORING'
+        ? 'FAILED'
+        : (previous?.rollbackState ?? null);
+  const deploymentOutcome =
+    failure ? 'FAILED' : supplied.phaseCode === 'COMPLETED' || status === 'COMPLETED' ? 'SUCCEEDED' : (previous?.deploymentOutcome ?? null);
   const step: ProgressStep = {
     timestamp: event.timestamp,
     phaseCode: supplied.phaseCode,
@@ -145,6 +162,14 @@ export function reduceOperationProgress(operations: OperationMap, event: Operati
     revision: (previous?.revision || 0) + 1,
     eventKeys: withBoundedItem(previous?.eventKeys ?? [], key, MAX_EVENT_KEYS),
     steps: withBoundedItem(previous?.steps ?? [], step, MAX_STEPS),
+    deploymentOutcome,
+    failureMessage: previous?.failureMessage ?? (failure && event.message ? event.message : null),
+    rollbackState,
+    rollbackMessage: rollbackStarted || rollbackCompleted ? event.message : (previous?.rollbackMessage ?? null),
+    rollbackFailureMessage:
+      failure && previous?.rollbackState === 'RESTORING' && event.message
+        ? event.message
+        : (previous?.rollbackFailureMessage ?? null),
   };
 
   return pruneUnregisteredOperations(
@@ -206,19 +231,19 @@ export function reconcileOperationProgress(
   if (!existing || (existing.progress?.revision || 0) !== expectedRevision) return operations;
 
   const previous = existing.progress;
-  if (!previous || isTerminalDeploymentStatus(previous.status)) return operations;
+  if (!previous || previous.deploymentOutcome === 'SUCCEEDED') return operations;
   const phaseCode = typeof record.phaseCode === 'string' && record.phaseCode ? record.phaseCode : previous.phaseCode;
   const status =
     record.status === null || record.status === undefined
       ? (previous.status ?? null)
-      : isDeploymentStatus(record.status)
+      : typeof record.status === 'string' && record.status
         ? record.status
         : (previous.status ?? null);
   const progressPercentage =
     record.progressPercentage === null
       ? (previous.progressPercentage ?? null)
       : typeof record.progressPercentage === 'number' && Number.isFinite(record.progressPercentage)
-        ? record.progressPercentage
+        ? Math.max(previous.progressPercentage ?? 0, record.progressPercentage)
         : (previous.progressPercentage ?? null);
   const message = typeof record.message === 'string' ? record.message : previous.message;
   if (!phaseCode && !status && progressPercentage === null && !message) return operations;
@@ -261,7 +286,10 @@ export function reconcileOperationProgress(
 }
 
 export function isOperationTerminal(operation: OperationRecord | null | undefined): boolean {
-  const status = operation?.progress?.status || operation?.status;
+  const progress = operation?.progress;
+  if (progress?.deploymentOutcome === 'SUCCEEDED' || progress?.deploymentOutcome === 'FAILED') return true;
+  if (progress?.rollbackState === 'RESTORING' || progress?.rollbackState === 'RESTORED') return false;
+  const status = progress?.status || operation?.status;
   if (isTerminalDeploymentStatus(status)) return true;
   return TERMINAL_LIFECYCLE_EVENTS.has(operation?.statusEvent ?? '');
 }

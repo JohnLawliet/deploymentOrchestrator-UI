@@ -231,6 +231,8 @@ export interface JarApplication {
   failedDeployCount: number;
   lastResult: string | null;
   terminalAvailable: boolean;
+  hasBackup: boolean;
+  backupSnapshotId: number | null;
   lastDeploymentOn: IsoDateTime | null;
   frontendUrl: string | null;
   frontendProfileUuid: string | null;
@@ -308,6 +310,8 @@ export interface JarRuntimeResource extends RuntimeResource {
   javaExecutablePath: string | null;
   frontendProfileUuid: string | null;
   frontendProfile: FrontendProfileActivity | null;
+  hasBackup: boolean;
+  backupSnapshotId: number | null;
 }
 export interface JarProfileActivity {
   id: string;
@@ -333,6 +337,8 @@ export interface JarProfileActivity {
   lastResult: string | null;
   frontendProfile: FrontendProfileActivity | null;
   terminalAvailable: boolean;
+  hasBackup: boolean;
+  backupSnapshotId: number | null;
 }
 export interface ActivityCheckRequest {
   pid?: number | null;

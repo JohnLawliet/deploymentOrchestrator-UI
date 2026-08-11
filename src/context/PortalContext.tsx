@@ -292,6 +292,14 @@ export function mergeOperationEventRecord(currentRecord: OperationRecord | undef
       : jarTerminalEvent && event.eventType === 'TERMINAL_CLOSED'
         ? false
         : currentRecord?.terminalAvailabilityConfirmed;
+  const restoredResourceState =
+    event.eventType === 'RESOURCE_ACTIVE'
+      ? 'ACTIVE'
+      : event.eventType === 'RESOURCE_INACTIVE'
+        ? 'INACTIVE'
+        : event.eventType === 'DEPLOYMENT_FAILED' && (event.state === 'ACTIVE' || event.state === 'INACTIVE')
+          ? event.state
+          : (currentRecord?.restoredResourceState ?? null);
   return {
     ...(currentRecord ?? { deploymentId }),
     deploymentId,
@@ -300,9 +308,11 @@ export function mergeOperationEventRecord(currentRecord: OperationRecord | undef
     profileId: eventResourceId(event) || currentRecord?.profileId,
     statusEvent: auxiliaryEvent ? currentRecord?.statusEvent : event.eventType,
     message: auxiliaryEvent ? currentRecord?.message : (event.message ?? currentRecord?.message),
+    state: event.state ?? currentRecord?.state,
     logAvailable: event.eventType === 'DEPLOYMENT_LOG_AVAILABLE' || currentRecord?.logAvailable,
     frontendWarning: isFrontendWarningEvent(event.eventType) ? event.message : currentRecord?.frontendWarning,
     ...(terminalAvailabilityConfirmed !== undefined ? { terminalAvailabilityConfirmed } : {}),
+    restoredResourceState,
   };
 }
 

@@ -292,7 +292,11 @@ describe('executeDatabaseQuery', () => {
       },
     });
 
-    const request: JarDeploymentRequest = { applicationName: 'orders', sourcePath: 'orders.jar', port: 8080 };
+    const request: JarDeploymentRequest = {
+      applicationName: 'orders',
+      sourcePath: 'orders.jar',
+      launcher: { mode: 'GENERATE_AND_SAVE', port: 8080 },
+    };
     await expect(deployJar(request)).rejects.toMatchObject({
       status: 400,
       code: 'JAR_NOT_EXECUTABLE',

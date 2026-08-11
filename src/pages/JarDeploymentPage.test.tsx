@@ -197,6 +197,7 @@ describe('JarDeploymentPage port contract', () => {
     expect(submit).toBeDisabled();
     expect(screen.queryByText('Port is required.')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Select test JAR' }));
+    expect(screen.queryByText(/No existing JAR applications were returned/)).not.toBeInTheDocument();
     await user.click(screen.getByLabelText('Yes, include launcher settings'));
     expect(screen.getByLabelText('Application name (required)')).toHaveValue('orders');
 

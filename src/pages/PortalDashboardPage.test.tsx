@@ -231,6 +231,8 @@ describe('PortalDashboardPage profile contract', () => {
           activeOperationId: null,
           terminalDeploymentId: 'retained-output-1',
           terminalAvailable: true,
+          hasBackup: true,
+          backupSnapshotId: 12,
           frontendUrl: 'https://public.example/orders',
           frontendProfileUuid: 'frontend-uuid',
         },
@@ -248,6 +250,8 @@ describe('PortalDashboardPage profile contract', () => {
         activeOperationId: null,
         terminalDeploymentId: 'retained-output-1',
         terminalAvailable: true,
+        hasBackup: true,
+        backupSnapshotId: 12,
         frontendUrl: 'https://public.example/orders',
         frontendProfileUuid: 'frontend-uuid',
         frontendProfile: {
@@ -295,10 +299,54 @@ describe('PortalDashboardPage profile contract', () => {
         resourceType: 'JAR',
       }),
     );
-    expect(jarRollback.props).toMatchObject({ resourceId: 'opaque-jar-uuid', applicationName: 'Orders' });
+    expect(jarRollback.props).toMatchObject({ resourceId: 'opaque-jar-uuid', applicationName: 'Orders', disabled: false });
 
     await user.click(screen.getByRole('button', { name: 'Restart' }));
     expect(api.restartJar).toHaveBeenCalledWith('Orders');
+  });
+
+  it('disables rollback until the backend reports a backup for each profile type', async () => {
+    api.getProfiles.mockResolvedValue([{ ...profile, hasBackup: false, backupSnapshotId: null }]);
+    api.getJars.mockResolvedValue({
+      domain: 'http://127.0.0.1',
+      jars: [
+        {
+          id: 'orders',
+          applicationName: 'Orders',
+          jarName: 'orders.jar',
+          status: 'INACTIVE',
+          health: 'FUNCTIONAL',
+          hasBackup: false,
+          backupSnapshotId: null,
+        },
+      ],
+    });
+    render(<PortalDashboardPage />);
+
+    expect(await screen.findByText('payments-qc')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Rollback to previous version' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Rollback JAR' })).toBeDisabled();
+    expect(rollback.props).toMatchObject({ disabled: true });
+    expect(jarRollback.props).toMatchObject({ disabled: true });
+  });
+
+  it('paginates filtered WildFly cards using the configured page size', async () => {
+    api.getProfiles.mockResolvedValue(
+      Array.from({ length: 21 }, (_, index) => ({
+        ...profile,
+        id: `profile-${index + 1}`,
+        name: `profile-${index + 1}`,
+      })),
+    );
+    const user = userEvent.setup();
+    render(<PortalDashboardPage />);
+
+    expect(await screen.findByText('Showing 1–20 of 21 profiles')).toBeVisible();
+    expect(screen.queryByText('profile-21')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Showing 21–21 of 21 profiles')).toBeVisible();
+    expect(screen.getByText('profile-21')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 
   it('stops an active managed JAR through a tracked dashboard operation', async () => {
