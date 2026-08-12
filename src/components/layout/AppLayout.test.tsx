@@ -17,7 +17,7 @@ vi.mock('./Sidebar', () => ({
 vi.mock('@/components/UsernameGate', () => ({
   default: () => <div>Username gate</div>,
 }));
-vi.mock('@/components/OperationPanel', () => ({
+vi.mock('@/components/OperationProgressPanel', () => ({
   default: () => <div>Operation panel</div>,
 }));
 

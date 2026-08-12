@@ -146,7 +146,7 @@ describe('OperationProgressPanel revised output contracts', () => {
     if (!options) throw new Error('Expected JAR terminal stream options.');
     expect(stream.url).toContain('/api/terminals/deployment-1/events');
     expect(screen.getByText('JAR output')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Download full log' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Download full log' })).not.toBeInTheDocument();
     expect(screen.getByText('100%')).toBeInTheDocument();
     expect(screen.queryByText('80%')).not.toBeInTheDocument();
     expect(screen.queryByText('Phase:')).not.toBeInTheDocument();
@@ -396,5 +396,165 @@ describe('OperationProgressPanel revised output contracts', () => {
     render(<OperationProgressPanel />);
 
     expect(screen.getByText('Rollback failed. Manual recovery is required.')).toBeVisible();
+  });
+
+  it('advances WAR progress from polled deployment records while stuck on early live progress', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      portal.viewingOperation = operationRecord({
+        deploymentId: 'war-poll-1',
+        resourceType: 'WILDFLY_PROFILE',
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+        operationType: 'WAR_DEPLOY',
+        label: 'Deploy WAR · orders',
+      });
+      portal.operations = {
+        'war-poll-1': {
+          deploymentId: 'war-poll-1',
+          operationType: 'WAR_DEPLOY',
+          resourceKey: 'WILDFLY_PROFILE:profile-1',
+          registered: true,
+          progress: operationProgressState({
+            status: 'VALIDATING',
+            phaseCode: 'VALIDATING',
+            progressPercentage: 5,
+            message: 'Validating',
+          }),
+        },
+      };
+      api.getOperation
+        .mockResolvedValueOnce({
+          deploymentId: 'war-poll-1',
+          status: 'VALIDATING',
+          progressPercentage: 5,
+          type: 'QC_WAR',
+        })
+        .mockResolvedValue({
+          deploymentId: 'war-poll-1',
+          status: 'DEPLOYING',
+          progressPercentage: 75,
+          type: 'QC_WAR',
+        });
+
+      render(<OperationProgressPanel />);
+      expect(await screen.findByText('5%')).toBeVisible();
+      expect(screen.getAllByText('VALIDATING').length).toBeGreaterThan(0);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(await screen.findByText('DEPLOYING')).toBeVisible();
+      expect(screen.getByText('75%')).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stretches the progress header when profile and JAR output are unavailable', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'war-layout-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      operationType: 'WAR_DEPLOY',
+      label: 'Deploy WAR · orders',
+    });
+    portal.operations = {
+      'war-layout-1': {
+        deploymentId: 'war-layout-1',
+        operationType: 'WAR_DEPLOY',
+        progress: operationProgressState({
+          status: 'DEPLOYING',
+          progressPercentage: 40,
+          steps: [
+            {
+              timestamp: '1',
+              phaseCode: 'PREPARE',
+              message: 'Prepared deployment',
+              status: 'PREPARING',
+              progressPercentage: null,
+              component: null,
+            },
+          ],
+        }),
+      },
+    };
+
+    const { container } = render(<OperationProgressPanel />);
+    const header = container.querySelector('[class*="flex-1"]');
+    expect(header?.className).toMatch(/flex-1/);
+    expect(header?.className).toMatch(/min-h-0/);
+    const history = screen.getByLabelText('Operation progress history');
+    expect(history).toHaveClass('flex-1');
+    expect(history).not.toHaveClass('max-h-40');
+    expect(screen.queryByText('Profile output')).not.toBeInTheDocument();
+    expect(screen.queryByText('JAR output')).not.toBeInTheDocument();
+  });
+
+  it('shows the combined JAR and frontend timeline without replacing raw progress history', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'jar-frontend-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+      operationType: 'JAR_DEPLOY',
+      frontendDeploymentRequested: true,
+    });
+    portal.operations = {
+      'jar-frontend-1': {
+        deploymentId: 'jar-frontend-1',
+        resourceType: 'JAR',
+        operationType: 'JAR_DEPLOY',
+        frontendDeploymentRequested: true,
+        progress: operationProgressState({
+          phaseCode: 'FRONTEND_PUBLISHING',
+          status: 'DEPLOYING',
+          progressPercentage: 95,
+          steps: [
+            {
+              timestamp: '1',
+              phaseCode: 'LOCKS_VERIFIED',
+              message: 'All deployment locks are secure.',
+              status: 'LOCKING',
+              progressPercentage: 15,
+              component: 'JarDeploymentService',
+            },
+          ],
+        }),
+      },
+    };
+
+    render(<OperationProgressPanel />);
+
+    expect(screen.getByLabelText('JAR deployment timeline')).toBeVisible();
+    expect(screen.getByText('Stage frontend files')).toBeVisible();
+    expect(screen.getByText('Publish frontend files')).toHaveClass('text-primary');
+    expect(screen.getByText('All deployment locks are secure.')).toBeVisible();
+  });
+
+  it('omits frontend stages from a JAR-only timeline while retaining lock and verification steps', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'jar-only-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+      operationType: 'JAR_DEPLOY',
+      frontendDeploymentRequested: false,
+    });
+    portal.operations = {
+      'jar-only-1': {
+        deploymentId: 'jar-only-1',
+        resourceType: 'JAR',
+        operationType: 'JAR_DEPLOY',
+        frontendDeploymentRequested: false,
+        progress: operationProgressState({ phaseCode: 'HEALTH_VERIFYING', status: 'DEPLOYING', progressPercentage: 90 }),
+      },
+    };
+
+    render(<OperationProgressPanel />);
+
+    expect(screen.getByLabelText('JAR deployment timeline')).toBeVisible();
+    expect(screen.getByText('Validate and secure locks')).toBeVisible();
+    expect(screen.getByText('Verify application health')).toHaveClass('text-primary');
+    expect(screen.queryByText('Stage frontend files')).not.toBeInTheDocument();
+    expect(screen.queryByText('Publish frontend files')).not.toBeInTheDocument();
   });
 });

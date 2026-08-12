@@ -285,6 +285,69 @@ export function reconcileOperationProgress(
   };
 }
 
+export function applyOperationFinished(
+  operations: OperationMap,
+  operationId: string,
+  outcome: string,
+  message?: string | null,
+  now = Date.now(),
+): OperationMap {
+  if (!operationId) return operations;
+  const existing = operations[operationId] || { deploymentId: operationId };
+  const previous = existing.progress;
+  if (previous?.deploymentOutcome === 'SUCCEEDED') return operations;
+
+  const normalized = String(outcome || '').toUpperCase();
+  const failed = normalized === 'FAILED';
+  const succeeded = normalized === 'COMPLETED' || normalized === 'SUCCEEDED';
+  if (!failed && !succeeded) return operations;
+
+  const status = failed ? 'FAILED' : 'COMPLETED';
+  const phaseCode = failed ? 'FAILED' : 'COMPLETED';
+  const progressPercentage = failed ? (previous?.progressPercentage ?? null) : 100;
+  const timestamp = new Date(now).toISOString();
+  const key = JSON.stringify(['finished', operationId, status, message ?? '']);
+  const step: ProgressStep = {
+    timestamp,
+    phaseCode,
+    message: message ?? null,
+    status,
+    progressPercentage,
+    component: previous?.component ?? null,
+  };
+  const progress: OperationProgressState = {
+    phaseCode,
+    status,
+    progressPercentage,
+    component: previous?.component ?? null,
+    message: message ?? previous?.message ?? null,
+    timestamp,
+    resourceKey: previous?.resourceKey ?? existing.resourceKey ?? null,
+    resourceType: previous?.resourceType ?? existing.resourceType ?? null,
+    username: previous?.username ?? null,
+    firstReceivedAt: previous?.firstReceivedAt || now,
+    receivedAt: now,
+    revision: (previous?.revision || 0) + 1,
+    eventKeys: withBoundedItem(previous?.eventKeys ?? [], key, MAX_EVENT_KEYS),
+    steps: withBoundedItem(previous?.steps ?? [], step, MAX_STEPS),
+    deploymentOutcome: failed ? 'FAILED' : 'SUCCEEDED',
+    failureMessage: failed ? (message ?? previous?.failureMessage ?? null) : (previous?.failureMessage ?? null),
+    rollbackState: previous?.rollbackState ?? null,
+    rollbackMessage: previous?.rollbackMessage ?? null,
+    rollbackFailureMessage: previous?.rollbackFailureMessage ?? null,
+  };
+
+  return {
+    ...operations,
+    [operationId]: {
+      ...existing,
+      deploymentId: operationId,
+      status,
+      progress,
+    },
+  };
+}
+
 export function isOperationTerminal(operation: OperationRecord | null | undefined): boolean {
   const progress = operation?.progress;
   if (progress?.deploymentOutcome === 'SUCCEEDED' || progress?.deploymentOutcome === 'FAILED') return true;

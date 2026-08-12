@@ -290,7 +290,7 @@ describe('normalizeDashboardProfile', () => {
 });
 
 describe('normalizeSystemSnapshot', () => {
-  it('rebuilds both activity maps with backup fields and canonical current IDs', () => {
+  it('rebuilds both activity maps with canonical current IDs', () => {
     expect(
       normalizeSystemSnapshot({
         wildflyProfiles: [
@@ -299,8 +299,6 @@ describe('normalizeSystemSnapshot', () => {
               id: 'profile-1',
               profileName: 'payments-qc',
               status: 'INACTIVE',
-              hasBackup: true,
-              backupSnapshotId: 1,
             }),
           },
         ],
@@ -339,8 +337,6 @@ describe('normalizeSystemSnapshot', () => {
           profileName: 'payments-qc',
           status: 'INACTIVE',
           activeOperationId: null,
-          hasBackup: true,
-          backupSnapshotId: 1,
         },
       ],
       jarProfiles: [

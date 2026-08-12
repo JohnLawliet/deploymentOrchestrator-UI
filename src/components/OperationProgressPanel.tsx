@@ -14,6 +14,12 @@ import {
   unsubscribeProfileLogs,
 } from '@/lib/contractApi';
 import { deploymentIdOf } from '@/lib/deploymentIdentity';
+import {
+  isJarDeploymentPhase,
+  jarDeploymentPhase,
+  jarDeploymentPhaseLabel,
+  jarDeploymentTimeline,
+} from '@/lib/jarDeploymentProgress';
 import { QC_WAR_TIMELINE, qcWarPhase, qcWarPhaseLabel } from '@/lib/qcWarProgress';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -142,6 +148,10 @@ export default function OperationProgressPanel() {
   const badgeVariant = failed ? 'destructive' : completed ? 'success' : cancelled ? 'muted' : complete ? 'success' : 'warning';
   const resourceKey = live?.resourceKey || viewingOperation?.resourceKey || '';
   const resourceType = viewingOperation?.resourceType || (String(resourceKey).startsWith('JAR:') ? 'JAR' : 'WILDFLY_PROFILE');
+  const jarDeployment =
+    resourceType === 'JAR' &&
+    operationType !== 'JAR_ROLLBACK' &&
+    (operationType === 'JAR_DEPLOY' || isJarDeploymentPhase(operationProgress?.phaseCode));
   const profileId = viewingOperation?.profileId || String(resourceKey).replace(/^WILDFLY_PROFILE:/, '');
   const profileOutput = resourceType === 'WILDFLY_PROFILE' && viewingOperation?.outputRequested && !!profileId;
   const jarOutput = resourceType === 'JAR' && viewingOperation?.outputRequested && !!operationId;
@@ -150,12 +160,15 @@ export default function OperationProgressPanel() {
     [jarOutput, jarOutputLines, profileLogLines, profileId],
   );
   const showFailedWarLog = warDeployment && deploymentFailed && live?.logAvailable === true;
-  const showJarLog = resourceType === 'JAR' && (jarOutput || live?.logAvailable === true);
+  const showJarLog = resourceType === 'JAR' && !jarOutput && live?.logAvailable === true;
   const showSuccessfulWarActions =
     completed && warDeployment && String(resourceKey).startsWith('WILDFLY_PROFILE:') && !!profileId;
   const rollback = rollbackDetails(live?.resources);
   const progressSteps = operationProgress?.steps ?? [];
   const currentPhase = qcWarPhase(operationProgress?.phaseCode);
+  const currentJarPhase = jarDeploymentPhase(operationProgress?.phaseCode);
+  const jarTimeline = jarDeploymentTimeline(live?.frontendDeploymentRequested ?? viewingOperation?.frontendDeploymentRequested === true);
+  const hasOutput = profileOutput || jarOutput;
 
   useEffect(() => {
     if (operationId) setExpanded(true);
@@ -359,7 +372,7 @@ export default function OperationProgressPanel() {
 
   return (
     <Card className="fixed bottom-4 left-[calc(var(--sidebar-width)+1.25rem)] right-5 top-4 z-50 flex flex-col overflow-hidden border-primary/25 shadow-glow">
-      <CardHeader className="max-h-[60%] shrink-0 overflow-y-auto p-4">
+      <CardHeader className={hasOutput ? 'max-h-[60%] shrink-0 overflow-y-auto p-4' : 'flex min-h-0 flex-1 overflow-y-auto p-4'}>
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Activity className="h-4 w-4 text-primary" />
@@ -397,7 +410,7 @@ export default function OperationProgressPanel() {
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           {phaseCode && (
             <span>
-              Phase: <strong className="text-foreground">{qcWarPhaseLabel(phaseCode) || phaseCode}</strong>{' '}
+              Phase: <strong className="text-foreground">{qcWarPhaseLabel(phaseCode) || jarDeploymentPhaseLabel(phaseCode) || phaseCode}</strong>{' '}
               <span className="font-mono">({phaseCode})</span>
             </span>
           )}
@@ -430,9 +443,29 @@ export default function OperationProgressPanel() {
             })}
           </ol>
         )}
+        {jarDeployment && (
+          <ol
+            className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
+            aria-label="JAR deployment timeline"
+          >
+            {jarTimeline.map((step, index) => {
+              const current = currentJarPhase?.timelineId === step.id;
+              return (
+                <li className={current ? 'font-semibold text-primary' : 'text-muted-foreground'} key={step.id}>
+                  <span className="mr-1 font-mono">{index + 1}.</span>
+                  {step.label}
+                </li>
+              );
+            })}
+          </ol>
+        )}
         {progressSteps.length > 0 && (
           <div
-            className="max-h-40 overflow-auto rounded-md border border-border bg-muted/15 p-2"
+            className={
+              hasOutput
+                ? 'max-h-40 overflow-auto rounded-md border border-border bg-muted/15 p-2'
+                : 'flex min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/15 p-2'
+            }
             aria-label="Operation progress history"
           >
             <ol className="space-y-1.5">
@@ -512,7 +545,7 @@ export default function OperationProgressPanel() {
           </p>
         )}
       </CardHeader>
-      {(profileOutput || jarOutput) && (
+      {hasOutput && (
         <CardContent className="flex min-h-0 flex-1 flex-col p-4 pt-0">
           <div className="mb-2 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2 text-xs font-medium">

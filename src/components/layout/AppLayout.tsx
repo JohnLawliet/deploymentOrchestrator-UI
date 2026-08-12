@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import UsernameGate from '@/components/UsernameGate';
-import OperationPanel from '@/components/OperationPanel';
+import OperationProgressPanel from '@/components/OperationProgressPanel';
 import OperationToastQueue from '@/components/OperationToastQueue';
+import SystemToastQueue from '@/components/SystemToastQueue';
 import { usePortal } from '@/context/PortalContext';
 
 export default function AppLayout() {
@@ -26,8 +27,9 @@ export default function AppLayout() {
       <main className="flex-1 min-w-0">
         <Outlet />
       </main>
-      <OperationPanel />
+      <OperationProgressPanel />
       <OperationToastQueue />
+      <SystemToastQueue />
     </div>
   );
 }

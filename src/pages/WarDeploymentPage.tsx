@@ -292,21 +292,7 @@ export default function WarDeploymentPage() {
     store.setError('');
     try {
       const operation = await deployWar(payload);
-      if (operation.profileId) {
-        store.setProfiles((current) =>
-          current.map((profile) =>
-            profile.id === operation.profileId
-              ? {
-                  ...profile,
-                  ...(typeof operation.hasBackup === 'boolean' ? { hasBackup: operation.hasBackup } : {}),
-                  ...(Object.prototype.hasOwnProperty.call(operation, 'backupSnapshotId')
-                    ? { backupSnapshotId: operation.backupSnapshotId }
-                    : {}),
-                }
-              : profile,
-          ),
-        );
-      }
+      if (!operation?.deploymentId) throw new Error('The backend did not return a deployment ID.');
       reservedProfile.current = '';
       clearLocalPreflight();
       pendingSnapshotRevision.current = snapshotRevision;

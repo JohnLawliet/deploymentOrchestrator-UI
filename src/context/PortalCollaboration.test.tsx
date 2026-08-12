@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventSourceMessage, FetchEventSourceInit, fetchEventSource } from '@microsoft/fetch-event-source';
 import type { ApiRequestError } from '@/lib/contractApi';
 import type { OperationFinished, SystemEvent } from '@/types/api-contracts';
-import { lockInfo, systemEvent, userPresence } from '../test/factories';
+import { frontendProfileActivity, jarProfileActivity, lockInfo, systemEvent, userPresence } from '../test/factories';
 
 type LockConflictHandler = (error: ApiRequestError) => void;
 
@@ -45,7 +45,10 @@ function Harness() {
       <span data-testid="users">{portal.onlineUsers.map((user) => `${user.username}:${user.status}`).join(',')}</span>
       <span data-testid="locks">{Object.keys(portal.locks).join(',')}</span>
       <span data-testid="toasts">{portal.operationToasts.map((toast) => toast.id).join(',')}</span>
+      <span data-testid="system-toasts">{portal.systemToasts.map((toast) => `${toast.variant}:${toast.message}`).join(',')}</span>
       <span data-testid="system-status">{portal.systemStatus}</span>
+      <span data-testid="frontend-profiles">{JSON.stringify(portal.frontendProfileActivityMap)}</span>
+      <span data-testid="jar-profiles">{JSON.stringify(portal.jarProfileActivityMap)}</span>
       <button type="button" onClick={portal.reportInteraction}>
         Interact
       </button>
@@ -163,6 +166,7 @@ describe('PortalProvider collaboration contracts', () => {
     );
     expect(screen.getByTestId('users')).toHaveTextContent('Mary Smith:ACTIVE');
     expect(screen.getByTestId('locks')).toHaveTextContent('profile:one');
+    expect(screen.getByTestId('system-toasts')).toBeEmptyDOMElement();
 
     send(
       options,
@@ -191,6 +195,43 @@ describe('PortalProvider collaboration contracts', () => {
     );
     expect(screen.getByTestId('users')).toBeEmptyDOMElement();
     expect(screen.getByTestId('locks')).toBeEmptyDOMElement();
+  });
+
+  it('applies portal-wide frontend association updates once without lifecycle reconciliation', async () => {
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(stream.fetchEventSource).toHaveBeenCalled());
+    const options = streamOptions();
+    const frontend = frontendProfileActivity({ profileUuid: 'frontend-2', profileName: 'payments-ui', jarProfileUuid: 'jar-2' });
+    const nestedFrontend = frontendProfileActivity({ ...frontend, profileName: 'nested-payments-ui' });
+    const jar = jarProfileActivity({ id: 'jar-2', applicationName: 'payments', frontendProfileUuid: 'frontend-2', frontendProfile: nestedFrontend });
+    const event = systemEvent({
+      eventType: 'FRONTEND_ASSOCIATION_UPDATED',
+      deploymentId: 'deployment-2',
+      resources: {
+        deploymentId: 'deployment-2',
+        jarProfileUuid: 'jar-2',
+        frontendProfileUuid: 'frontend-2',
+        frontendProfile: frontend,
+        jarProfile: jar,
+      },
+    });
+
+    send(options, event);
+    const frontendState = screen.getByTestId('frontend-profiles').textContent;
+    const jarState = screen.getByTestId('jar-profiles').textContent;
+    expect(frontendState).toContain('frontend-2');
+    expect(jarState).toContain('jar-2');
+    expect(jarState).toContain('nested-payments-ui');
+    expect(api.getRuntimeResource).not.toHaveBeenCalled();
+
+    send(options, event);
+    expect(screen.getByTestId('frontend-profiles')).toHaveTextContent(frontendState || '');
+    expect(screen.getByTestId('jar-profiles')).toHaveTextContent(jarState || '');
+    expect(api.getRuntimeResource).not.toHaveBeenCalled();
   });
 
   it('suppresses initiator toasts, deduplicates other-user completions, and reconciles targeted resources', async () => {
@@ -240,6 +281,45 @@ describe('PortalProvider collaboration contracts', () => {
       expect(api.getRuntimeResource).toHaveBeenCalledWith('WILDFLY_PROFILE:one');
       expect(api.getProfiles).toHaveBeenCalled();
     });
+  });
+
+  it('shows live SYSTEM reconciliation alerts without changing resource or operation state', async () => {
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(stream.fetchEventSource).toHaveBeenCalled());
+    const options = streamOptions();
+    const initialResourceRequests = api.getRuntimeResource.mock.calls.length;
+    const initialProfileRequests = api.getProfiles.mock.calls.length;
+
+    for (const resources of [[], [{ profile: 'orders', issues: ['unhealthy'] }], [{ profile: 'orders' }, { profile: 'billing' }]]) {
+      send(
+        options,
+        systemEvent({
+          scope: 'SYSTEM',
+          eventType: 'RUNTIME_RECONCILIATION_ISSUES',
+          message: 'Runtime reconciliation found issues.',
+          resources,
+        }),
+      );
+    }
+    send(
+      options,
+      systemEvent({
+        scope: 'SYSTEM',
+        eventType: 'RUNTIME_RECONCILIATION_RECOVERED',
+        message: 'Runtime reconciliation recovered.',
+        resources: null,
+      }),
+    );
+
+    expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:Runtime reconciliation found issues.');
+    expect(screen.getByTestId('system-toasts')).toHaveTextContent('success:Runtime reconciliation recovered.');
+    expect(screen.getByTestId('toasts')).toBeEmptyDOMElement();
+    expect(api.getRuntimeResource).toHaveBeenCalledTimes(initialResourceRequests);
+    expect(api.getProfiles).toHaveBeenCalledTimes(initialProfileRequests);
   });
 
   it('throttles real interaction and reconciles locks after reconnect and HTTP 423', async () => {

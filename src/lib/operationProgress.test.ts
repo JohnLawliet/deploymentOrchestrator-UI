@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseOperationProgressData, reduceOperationProgress, registerOperationInMap } from './operationProgress';
+import {
+  applyOperationFinished,
+  parseOperationProgressData,
+  reduceOperationProgress,
+  registerOperationInMap,
+} from './operationProgress';
 import { systemEvent } from '@/test/factories';
 import type { SystemEvent } from '@/types/api-contracts';
 
@@ -71,6 +76,25 @@ describe('operation progress canonical correlation', () => {
 
     expect(unconfirmed['deployment-1']).not.toHaveProperty('logAvailable');
     expect(confirmed['deployment-1']?.logAvailable).toBe(true);
+  });
+
+  it('retains whether a registered JAR deployment includes frontend publishing as progress arrives', () => {
+    const registered = registerOperationInMap(
+      {},
+      { deploymentId: 'deployment-1', resourceType: 'JAR', operationType: 'JAR_DEPLOY', frontendDeploymentRequested: true },
+      'JAR:orders',
+      'Deploy JAR · orders + Portal',
+    );
+    const event = progressEvent('deployment-1');
+    event.resourceKey = 'JAR:orders';
+    event.resourceType = 'JAR';
+    event.resources = { ...event.resources, phaseCode: 'FRONTEND_STAGING', status: 'DEPLOYING', progressPercentage: 20 };
+
+    expect(reduceOperationProgress(registered, event)['deployment-1']).toMatchObject({
+      operationType: 'JAR_DEPLOY',
+      frontendDeploymentRequested: true,
+      progress: { phaseCode: 'FRONTEND_STAGING' },
+    });
   });
 
   it('rejects legacy operationId-only progress events outside the backend SSE contract', () => {
@@ -182,5 +206,38 @@ describe('operation progress canonical correlation', () => {
       rollbackState: 'RESTORED',
       progressPercentage: 100,
     });
+  });
+
+  it('applies OPERATION_FINISHED outcomes onto registered progress', () => {
+    const registered = registerOperationInMap(
+      reduceOperationProgress({}, progressEvent('war-1')),
+      { deploymentId: 'war-1', operationType: 'WAR_DEPLOY' },
+      'WILDFLY_PROFILE:profile-1',
+      'Deploy WAR',
+    );
+
+    expect(applyOperationFinished(registered, 'war-1', 'COMPLETED', 'WAR deploy finished')['war-1']).toMatchObject({
+      status: 'COMPLETED',
+      progress: {
+        phaseCode: 'COMPLETED',
+        status: 'COMPLETED',
+        progressPercentage: 100,
+        deploymentOutcome: 'SUCCEEDED',
+        message: 'WAR deploy finished',
+      },
+    });
+
+    expect(applyOperationFinished(registered, 'war-1', 'FAILED', 'boom')['war-1']).toMatchObject({
+      status: 'FAILED',
+      progress: {
+        phaseCode: 'FAILED',
+        status: 'FAILED',
+        deploymentOutcome: 'FAILED',
+        failureMessage: 'boom',
+        progressPercentage: 50,
+      },
+    });
+
+    expect(applyOperationFinished(registered, 'war-1', 'UNKNOWN')).toBe(registered);
   });
 });

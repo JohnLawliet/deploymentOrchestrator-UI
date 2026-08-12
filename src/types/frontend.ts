@@ -48,8 +48,6 @@ export interface RuntimeActivityModel {
   lastSuccessfulDeploymentOn?: string | null;
   lastUpdatedOn?: string | null;
   lastResult?: string | null;
-  hasBackup?: boolean | null;
-  backupSnapshotId?: number | null;
 }
 
 export interface FrontendProfileActivityModel {
@@ -117,8 +115,6 @@ export interface OperationRecord {
   snapshotId?: number | null;
   applicationVersion?: number | null;
   terminalEventsUrl?: string | null;
-  hasBackup?: boolean;
-  backupSnapshotId?: number | null;
   resourceKey?: string;
   resourceType?: string | null;
   profileId?: string;
@@ -132,6 +128,7 @@ export interface OperationRecord {
   logAvailable?: boolean;
   profileLogUnavailable?: boolean;
   frontendWarning?: string | null;
+  frontendDeploymentRequested?: boolean;
   message?: string | null;
   state?: string | null;
   rollbackMessage?: string | null;
@@ -150,6 +147,12 @@ export interface OperationToast {
   targetLabel: string;
   deploymentId: string;
   outcome: string;
+}
+
+export interface SystemToast {
+  id: string;
+  message: string;
+  variant: 'warning' | 'success';
 }
 
 export const errorMessage = (reason: unknown, fallback = 'The request could not be completed.'): string =>

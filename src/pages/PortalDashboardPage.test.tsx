@@ -81,8 +81,6 @@ const profile = {
   lastSuccessfulDeploymentOn: '2026-07-25T11:00:00Z',
   lastUpdatedOn: '2026-07-26T13:24:11Z',
   lastResult: 'SUCCESS',
-  hasBackup: true,
-  backupSnapshotId: 'snapshot-1',
 };
 
 describe('PortalDashboardPage profile contract', () => {
@@ -231,8 +229,6 @@ describe('PortalDashboardPage profile contract', () => {
           activeOperationId: null,
           terminalDeploymentId: 'retained-output-1',
           terminalAvailable: true,
-          hasBackup: true,
-          backupSnapshotId: 12,
           frontendUrl: 'https://public.example/orders',
           frontendProfileUuid: 'frontend-uuid',
         },
@@ -250,8 +246,6 @@ describe('PortalDashboardPage profile contract', () => {
         activeOperationId: null,
         terminalDeploymentId: 'retained-output-1',
         terminalAvailable: true,
-        hasBackup: true,
-        backupSnapshotId: 12,
         frontendUrl: 'https://public.example/orders',
         frontendProfileUuid: 'frontend-uuid',
         frontendProfile: {
@@ -305,8 +299,8 @@ describe('PortalDashboardPage profile contract', () => {
     expect(api.restartJar).toHaveBeenCalledWith('Orders');
   });
 
-  it('keeps rollback available when legacy backup metadata is absent', async () => {
-    api.getProfiles.mockResolvedValue([{ ...profile, hasBackup: false, backupSnapshotId: null }]);
+  it('keeps rollback available without backup metadata on the profile', async () => {
+    api.getProfiles.mockResolvedValue([{ ...profile }]);
     api.getJars.mockResolvedValue({
       domain: 'http://127.0.0.1',
       jars: [
@@ -316,8 +310,6 @@ describe('PortalDashboardPage profile contract', () => {
           jarName: 'orders.jar',
           status: 'INACTIVE',
           health: 'FUNCTIONAL',
-          hasBackup: false,
-          backupSnapshotId: null,
         },
       ],
     });

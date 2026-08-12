@@ -158,8 +158,6 @@ export interface WarDeploymentStartResponse {
   status: 'STARTING';
   terminalEventsUrl: string | null;
   profileId: string;
-  hasBackup: boolean;
-  backupSnapshotId: number | null;
 }
 export interface WarSnapshotSummary {
   snapshotId: number;
@@ -189,8 +187,6 @@ export interface WildflyProfileActivity {
   lastSuccessfulDeploymentOn: IsoDateTime | null;
   lastUpdatedOn: IsoDateTime | null;
   lastResult: string | null;
-  hasBackup: boolean;
-  backupSnapshotId: number | null;
 }
 export interface FrontendProfileActivity {
   profileUuid: string;
@@ -231,8 +227,6 @@ export interface JarApplication {
   failedDeployCount: number;
   lastResult: string | null;
   terminalAvailable: boolean;
-  hasBackup: boolean;
-  backupSnapshotId: number | null;
   lastDeploymentOn: IsoDateTime | null;
   frontendUrl: string | null;
   frontendProfileUuid: string | null;
@@ -253,8 +247,6 @@ export interface Profile {
   running: boolean;
   portOffset: number | null;
   lastDeployedUser: string | null;
-  hasBackup: boolean;
-  backupSnapshotId: number | null;
   status: ResourceState;
   health: ProfileHealth;
   pid: number | null;
@@ -310,8 +302,6 @@ export interface JarRuntimeResource extends RuntimeResource {
   javaExecutablePath: string | null;
   frontendProfileUuid: string | null;
   frontendProfile: FrontendProfileActivity | null;
-  hasBackup: boolean;
-  backupSnapshotId: number | null;
 }
 export interface JarProfileActivity {
   id: string;
@@ -337,8 +327,6 @@ export interface JarProfileActivity {
   lastResult: string | null;
   frontendProfile: FrontendProfileActivity | null;
   terminalAvailable: boolean;
-  hasBackup: boolean;
-  backupSnapshotId: number | null;
 }
 export interface ActivityCheckRequest {
   pid?: number | null;
@@ -535,6 +523,13 @@ export interface SystemSnapshot {
   onlineUsers: UserPresence[];
   locks: LockInfo[];
 }
+export interface FrontendAssociationUpdated {
+  deploymentId: string;
+  jarProfileUuid: string;
+  frontendProfileUuid: string;
+  frontendProfile: FrontendProfileActivity;
+  jarProfile: JarProfileActivity;
+}
 export interface OperationFinished {
   operationId: string;
   username: string;
@@ -546,6 +541,7 @@ export interface OperationFinished {
   summary: string;
 }
 export interface SystemEventFields {
+  scope: 'SYSTEM' | 'RESOURCE' | 'USER' | 'OPERATION';
   timestamp: IsoDateTime;
   deploymentId: string | null;
   resourceKey: string | null;
@@ -557,8 +553,6 @@ export interface SystemEventFields {
   consecutiveFailures: number | null;
   failedDeployCount: number | null;
   lastResult: string | null;
-  hasBackup: boolean | null;
-  backupSnapshotId: number | null;
   username: string | null;
   message: string | null;
   application: string | null;
@@ -566,7 +560,10 @@ export interface SystemEventFields {
   readinessReason: string | null;
 }
 export type SystemEvent =
-  | (SystemEventFields & { eventType: 'SYSTEM_SNAPSHOT'; resources: SystemSnapshot })
+  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'SYSTEM_SNAPSHOT'; resources: SystemSnapshot })
+  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'FRONTEND_ASSOCIATION_UPDATED'; resources: FrontendAssociationUpdated })
+  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'RUNTIME_RECONCILIATION_ISSUES'; resources: unknown[] })
+  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'RUNTIME_RECONCILIATION_RECOVERED'; resources: null })
   | (SystemEventFields & { eventType: 'OPERATION_PROGRESS'; resources: OperationProgress })
   | (SystemEventFields & { eventType: 'USER_PRESENCE_CHANGED'; resources: UserPresence })
   | (SystemEventFields & {

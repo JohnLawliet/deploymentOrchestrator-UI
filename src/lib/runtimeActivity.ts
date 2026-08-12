@@ -24,8 +24,6 @@ type RuntimeActivityInput = Partial<RuntimeResource & JarRuntimeResource> & {
   lastSuccessfulDeploymentOn?: string | null;
   lastUpdatedOn?: string | null;
   serverLogAvailable?: boolean;
-  hasBackup?: boolean | null;
-  backupSnapshotId?: number | null;
   applicationName?: string | null;
   jarName?: string | null;
   applicationPort?: number | null;
@@ -112,8 +110,6 @@ export function normalizeDashboardProfile(profile: DashboardProfileInput): Wildf
     lastSuccessfulDeploymentOn: profile.lastSuccessfulDeploymentOn,
     lastUpdatedOn: profile.lastUpdatedOn,
     lastResult: profile.lastResult,
-    hasBackup: profile.hasBackup,
-    backupSnapshotId: Object.prototype.hasOwnProperty.call(profile, 'backupSnapshotId') ? profile.backupSnapshotId : undefined,
     serverLogAvailable: profile.serverLogAvailable,
   });
 }
@@ -154,10 +150,6 @@ export function normalizeRuntimeActivity(resource: RuntimeActivityInput): Wildfl
           frontendProfile,
           terminalDeploymentId: resource.terminalDeploymentId,
           terminalAvailable: resource.terminalAvailable,
-          hasBackup: resource.hasBackup,
-          backupSnapshotId: Object.prototype.hasOwnProperty.call(resource, 'backupSnapshotId')
-            ? resource.backupSnapshotId
-            : undefined,
         }
       : {
           profileName: resource.profileName ?? resource.displayName,
@@ -179,14 +171,6 @@ export function normalizeRuntimeActivity(resource: RuntimeActivityInput): Wildfl
     lastUpdatedOn: resource.lastCheckedAt ?? resource.lastUpdatedOn,
     lastResult: resource.lastResult,
     activeOperationId: activeOperationIdOf(resource),
-    ...(jar
-      ? {}
-      : {
-          hasBackup: resource.hasBackup,
-          backupSnapshotId: Object.prototype.hasOwnProperty.call(resource, 'backupSnapshotId')
-            ? resource.backupSnapshotId
-            : undefined,
-        }),
   });
 }
 
@@ -202,8 +186,6 @@ function normalizeJarProfileActivity(profile: JarProfileActivity): JarActivity {
     activeOperationId: profile.activeOperationId,
     terminalDeploymentId: profile.terminalDeploymentId,
     terminalAvailable: profile.terminalAvailable,
-    hasBackup: profile.hasBackup,
-    backupSnapshotId: profile.backupSnapshotId,
     applicationPort: profile.applicationPort,
     javaExecutablePath: profile.javaExecutablePath,
     healthUrl: profile.healthUrl,

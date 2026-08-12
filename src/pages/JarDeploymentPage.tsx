@@ -375,6 +375,8 @@ export default function JarDeploymentPage() {
           ...operation,
           resourceType: 'JAR',
           applicationName: trimmedApplicationName,
+          operationType: 'JAR_DEPLOY',
+          frontendDeploymentRequested: frontendMode === FRONTEND_MODES.DEPLOY,
         },
         `JAR:${selected?.id || trimmedApplicationName}`,
         `Deploy JAR · ${trimmedApplicationName}${frontendMode === FRONTEND_MODES.DEPLOY ? ` + ${selectedFrontend?.profileName || ''}` : ''}`,
