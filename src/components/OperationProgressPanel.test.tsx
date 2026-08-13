@@ -526,8 +526,8 @@ describe('OperationProgressPanel revised output contracts', () => {
     render(<OperationProgressPanel />);
 
     expect(screen.getByLabelText('JAR deployment timeline')).toBeVisible();
-    expect(screen.getByText('Stage frontend files')).toBeVisible();
-    expect(screen.getByText('Publish frontend files')).toHaveClass('text-primary');
+    expect(screen.getByRole('button', { name: /Stage frontend files/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /Publish frontend files/ }).closest('li')).toHaveClass('text-primary');
     expect(screen.getByText('All deployment locks are secure.')).toBeVisible();
   });
 
@@ -552,9 +552,35 @@ describe('OperationProgressPanel revised output contracts', () => {
     render(<OperationProgressPanel />);
 
     expect(screen.getByLabelText('JAR deployment timeline')).toBeVisible();
-    expect(screen.getByText('Validate and secure locks')).toBeVisible();
-    expect(screen.getByText('Verify application health')).toHaveClass('text-primary');
-    expect(screen.queryByText('Stage frontend files')).not.toBeInTheDocument();
-    expect(screen.queryByText('Publish frontend files')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Validate and secure locks/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /Verify application health/ }).closest('li')).toHaveClass('text-primary');
+    expect(screen.queryByRole('button', { name: /Stage frontend files/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Publish frontend files/ })).not.toBeInTheDocument();
+  });
+
+  it('shows timeline step descriptions in tooltips', async () => {
+    const user = userEvent.setup();
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'war-tooltip-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-a',
+      profileId: 'profile-a',
+      operationType: 'WAR_DEPLOY',
+    });
+    portal.operations = {
+      'war-tooltip-1': {
+        deploymentId: 'war-tooltip-1',
+        resourceType: 'WILDFLY_PROFILE',
+        operationType: 'WAR_DEPLOY',
+        progress: operationProgressState({ phaseCode: 'WAR_EXTRACTING', status: 'DEPLOYING', progressPercentage: 20 }),
+      },
+    };
+
+    render(<OperationProgressPanel />);
+
+    await user.hover(screen.getByRole('button', { name: /Extract WAR/ }));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'Unpacks the selected Tech Drive WAR into a staging directory.',
+    );
   });
 });

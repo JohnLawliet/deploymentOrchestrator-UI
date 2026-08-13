@@ -32,4 +32,15 @@ describe('JAR deployment progress definitions', () => {
       expect.arrayContaining(['frontend-stage', 'frontend-publish']),
     );
   });
+
+  it('exposes a description for every timeline step', () => {
+    const timeline = jarDeploymentTimeline(true);
+    expect(timeline).toHaveLength(10);
+    for (const step of timeline) {
+      expect(step.description.trim().length).toBeGreaterThan(0);
+    }
+    expect(timeline.find((step) => step.id === 'deploy')?.description).toBe(
+      'Copies the new JAR into the runtime location.',
+    );
+  });
 });

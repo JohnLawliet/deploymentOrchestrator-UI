@@ -9,6 +9,16 @@ describe('QC WAR progress catalog', () => {
     expect(QC_WAR_TIMELINE.find((step) => step.id === 'stop')?.label).toBe('Stop profile');
   });
 
+  it('exposes a description for every timeline step', () => {
+    expect(QC_WAR_TIMELINE).toHaveLength(9);
+    for (const step of QC_WAR_TIMELINE) {
+      expect(step.description.trim().length).toBeGreaterThan(0);
+    }
+    expect(QC_WAR_TIMELINE.find((step) => step.id === 'extract')?.description).toBe(
+      'Unpacks the selected Tech Drive WAR into a staging directory.',
+    );
+  });
+
   it('keeps future phase codes displayable', () => {
     expect(qcWarPhaseLabel('FUTURE_PHASE')).toBeNull();
   });

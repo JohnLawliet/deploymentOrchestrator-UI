@@ -24,8 +24,38 @@ import { QC_WAR_TIMELINE, qcWarPhase, qcWarPhaseLabel } from '@/lib/qcWarProgres
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { DeploymentRecord, TerminalOutputEvent } from '@/types/api-contracts';
 import { errorMessage } from '@/types/frontend';
+
+function TimelineStepItem({
+  index,
+  label,
+  description,
+  current,
+}: {
+  index: number;
+  label: string;
+  description: string;
+  current: boolean;
+}) {
+  return (
+    <li className={current ? 'font-semibold text-primary' : 'text-muted-foreground'}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="cursor-help text-left underline decoration-dotted decoration-current/40 underline-offset-2"
+          >
+            <span className="mr-1 font-mono">{index}.</span>
+            {label}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{description}</TooltipContent>
+      </Tooltip>
+    </li>
+  );
+}
 
 const terminalStates = new Set(['RESOURCE_ACTIVE', 'RESOURCE_FAILED', 'RESOURCE_INACTIVE', 'ACTIVE', 'FAILED', 'INACTIVE']);
 
@@ -428,36 +458,40 @@ export default function OperationProgressPanel() {
           <p className="text-sm text-red-700">{operationProgress.rollbackFailureMessage}</p>
         )}
         {warDeployment && (
-          <ol
-            className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
-            aria-label="QC WAR deployment timeline"
-          >
-            {QC_WAR_TIMELINE.map((step, index) => {
-              const current = currentPhase?.timelineId === step.id;
-              return (
-                <li className={current ? 'font-semibold text-primary' : 'text-muted-foreground'} key={step.id}>
-                  <span className="mr-1 font-mono">{index + 1}.</span>
-                  {step.label}
-                </li>
-              );
-            })}
-          </ol>
+          <TooltipProvider delayDuration={200}>
+            <ol
+              className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
+              aria-label="QC WAR deployment timeline"
+            >
+              {QC_WAR_TIMELINE.map((step, index) => (
+                <TimelineStepItem
+                  key={step.id}
+                  index={index + 1}
+                  label={step.label}
+                  description={step.description}
+                  current={currentPhase?.timelineId === step.id}
+                />
+              ))}
+            </ol>
+          </TooltipProvider>
         )}
         {jarDeployment && (
-          <ol
-            className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
-            aria-label="JAR deployment timeline"
-          >
-            {jarTimeline.map((step, index) => {
-              const current = currentJarPhase?.timelineId === step.id;
-              return (
-                <li className={current ? 'font-semibold text-primary' : 'text-muted-foreground'} key={step.id}>
-                  <span className="mr-1 font-mono">{index + 1}.</span>
-                  {step.label}
-                </li>
-              );
-            })}
-          </ol>
+          <TooltipProvider delayDuration={200}>
+            <ol
+              className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
+              aria-label="JAR deployment timeline"
+            >
+              {jarTimeline.map((step, index) => (
+                <TimelineStepItem
+                  key={step.id}
+                  index={index + 1}
+                  label={step.label}
+                  description={step.description}
+                  current={currentJarPhase?.timelineId === step.id}
+                />
+              ))}
+            </ol>
+          </TooltipProvider>
         )}
         {progressSteps.length > 0 && (
           <div

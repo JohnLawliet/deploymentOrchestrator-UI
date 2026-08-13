@@ -1,6 +1,7 @@
 type JarDeploymentTimelineStep = {
   id: string;
   label: string;
+  description: string;
   phaseCodes: readonly string[];
   frontendOnly?: boolean;
 };
@@ -42,6 +43,8 @@ const BASE_JAR_DEPLOYMENT_TIMELINE: readonly JarDeploymentTimelineStep[] = [
   {
     id: 'initialize',
     label: 'Initialize deployment',
+    description:
+      'Resolves metadata, creates the deployment record, registers terminal/runtime state, and queues the deploy task.',
     phaseCodes: [
       'METADATA_RESOLVED',
       'RECORD_CREATED',
@@ -54,15 +57,62 @@ const BASE_JAR_DEPLOYMENT_TIMELINE: readonly JarDeploymentTimelineStep[] = [
       'TASK_QUEUED',
     ],
   },
-  { id: 'lock', label: 'Validate and secure locks', phaseCodes: ['VALIDATING', 'LOCK_SECURED', 'LOCKS_VERIFIED'] },
-  { id: 'frontend-stage', label: 'Stage frontend files', phaseCodes: ['FRONTEND_STAGING'], frontendOnly: true },
-  { id: 'snapshot', label: 'Create snapshot, if replacing', phaseCodes: ['SNAPSHOT_CREATING', 'SNAPSHOT_READY'] },
-  { id: 'stop', label: 'Stop application', phaseCodes: ['APPLICATION_STOPPING'] },
-  { id: 'deploy', label: 'Deploy JAR artifact', phaseCodes: ['ARTIFACT_COPYING'] },
-  { id: 'start', label: 'Start application', phaseCodes: ['APPLICATION_STARTING'] },
-  { id: 'health', label: 'Verify application health', phaseCodes: ['HEALTH_VERIFYING'] },
-  { id: 'frontend-publish', label: 'Publish frontend files', phaseCodes: ['FRONTEND_PUBLISHING'], frontendOnly: true },
-  { id: 'finalize', label: 'Complete and clean up', phaseCodes: ['COMPLETED', 'CLEANUP'] },
+  {
+    id: 'lock',
+    label: 'Validate and secure locks',
+    description: 'Validates the request and acquires/verifies exclusive locks for this deployment.',
+    phaseCodes: ['VALIDATING', 'LOCK_SECURED', 'LOCKS_VERIFIED'],
+  },
+  {
+    id: 'frontend-stage',
+    label: 'Stage frontend files',
+    description: 'Stages associated frontend files when a frontend deploy was requested.',
+    phaseCodes: ['FRONTEND_STAGING'],
+    frontendOnly: true,
+  },
+  {
+    id: 'snapshot',
+    label: 'Create snapshot, if replacing',
+    description: 'Creates a JAR snapshot before replace so rollback is possible; skipped on a fresh install.',
+    phaseCodes: ['SNAPSHOT_CREATING', 'SNAPSHOT_READY'],
+  },
+  {
+    id: 'stop',
+    label: 'Stop application',
+    description: 'Stops the running application process.',
+    phaseCodes: ['APPLICATION_STOPPING'],
+  },
+  {
+    id: 'deploy',
+    label: 'Deploy JAR artifact',
+    description: 'Copies the new JAR into the runtime location.',
+    phaseCodes: ['ARTIFACT_COPYING'],
+  },
+  {
+    id: 'start',
+    label: 'Start application',
+    description: 'Starts the application using the new artifact.',
+    phaseCodes: ['APPLICATION_STARTING'],
+  },
+  {
+    id: 'health',
+    label: 'Verify application health',
+    description: 'Confirms the application started and is healthy.',
+    phaseCodes: ['HEALTH_VERIFYING'],
+  },
+  {
+    id: 'frontend-publish',
+    label: 'Publish frontend files',
+    description: 'Publishes staged frontend files to the live location when a frontend deploy was requested.',
+    phaseCodes: ['FRONTEND_PUBLISHING'],
+    frontendOnly: true,
+  },
+  {
+    id: 'finalize',
+    label: 'Complete and clean up',
+    description: 'Marks the operation complete and cleans up temporary deployment resources.',
+    phaseCodes: ['COMPLETED', 'CLEANUP'],
+  },
 ];
 
 export const jarDeploymentTimeline = (frontendDeploymentRequested: boolean): readonly JarDeploymentTimelineStep[] =>

@@ -523,13 +523,6 @@ export interface SystemSnapshot {
   onlineUsers: UserPresence[];
   locks: LockInfo[];
 }
-export interface FrontendAssociationUpdated {
-  deploymentId: string;
-  jarProfileUuid: string;
-  frontendProfileUuid: string;
-  frontendProfile: FrontendProfileActivity;
-  jarProfile: JarProfileActivity;
-}
 export interface OperationFinished {
   operationId: string;
   username: string;
@@ -541,7 +534,6 @@ export interface OperationFinished {
   summary: string;
 }
 export interface SystemEventFields {
-  scope: 'SYSTEM' | 'RESOURCE' | 'USER' | 'OPERATION';
   timestamp: IsoDateTime;
   deploymentId: string | null;
   resourceKey: string | null;
@@ -560,10 +552,7 @@ export interface SystemEventFields {
   readinessReason: string | null;
 }
 export type SystemEvent =
-  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'SYSTEM_SNAPSHOT'; resources: SystemSnapshot })
-  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'FRONTEND_ASSOCIATION_UPDATED'; resources: FrontendAssociationUpdated })
-  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'RUNTIME_RECONCILIATION_ISSUES'; resources: unknown[] })
-  | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'RUNTIME_RECONCILIATION_RECOVERED'; resources: null })
+  | (SystemEventFields & { eventType: 'SYSTEM_SNAPSHOT'; resources: SystemSnapshot })
   | (SystemEventFields & { eventType: 'OPERATION_PROGRESS'; resources: OperationProgress })
   | (SystemEventFields & { eventType: 'USER_PRESENCE_CHANGED'; resources: UserPresence })
   | (SystemEventFields & {

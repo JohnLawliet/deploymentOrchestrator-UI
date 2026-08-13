@@ -3,6 +3,7 @@ import type { OperationProgress } from '@/types/api-contracts';
 export type QcWarTimelineStep = {
   id: string;
   label: string;
+  description: string;
   phaseCodes: readonly string[];
 };
 
@@ -33,15 +34,60 @@ export const QC_WAR_PHASES: Readonly<Record<string, QcWarPhase>> = {
 };
 
 export const QC_WAR_TIMELINE: readonly QcWarTimelineStep[] = [
-  { id: 'extract', label: 'Extract WAR', phaseCodes: ['WAR_EXTRACTING'] },
-  { id: 'configure', label: 'Apply QC configuration', phaseCodes: ['QC_MERGING', 'QC_STAGING_READY'] },
-  { id: 'stop', label: 'Stop profile', phaseCodes: ['PROFILE_STOPPING'] },
-  { id: 'backup', label: 'Secure backup', phaseCodes: ['SNAPSHOT_RELOCATING', 'SNAPSHOT_READY'] },
-  { id: 'datasource', label: 'Update datasource, if requested', phaseCodes: ['DATASOURCE_UPDATING'] },
-  { id: 'install', label: 'Install deployment', phaseCodes: ['ARCHIVE_INSTALLING', 'ARCHIVE_INSTALLED'] },
-  { id: 'start', label: 'Start profile', phaseCodes: ['PROFILE_STARTING'] },
-  { id: 'wait', label: 'Wait for WildFly', phaseCodes: ['DEPLOYMENT_MARKER_WAIT'] },
-  { id: 'health', label: 'Verify health', phaseCodes: ['HEALTH_VERIFYING'] },
+  {
+    id: 'extract',
+    label: 'Extract WAR',
+    description: 'Unpacks the selected Tech Drive WAR into a staging directory.',
+    phaseCodes: ['WAR_EXTRACTING'],
+  },
+  {
+    id: 'configure',
+    label: 'Apply QC configuration',
+    description: 'Merges QC configuration into the staged WAR and finishes staging.',
+    phaseCodes: ['QC_MERGING', 'QC_STAGING_READY'],
+  },
+  {
+    id: 'stop',
+    label: 'Stop profile',
+    description: 'Stops the target WildFly profile so the deployment can be replaced safely.',
+    phaseCodes: ['PROFILE_STOPPING'],
+  },
+  {
+    id: 'backup',
+    label: 'Secure backup',
+    description: 'Moves the current deployment aside as a rollback snapshot.',
+    phaseCodes: ['SNAPSHOT_RELOCATING', 'SNAPSHOT_READY'],
+  },
+  {
+    id: 'datasource',
+    label: 'Update datasource, if requested',
+    description: 'Updates the profile datasource when the deploy requested a change; otherwise this step is skipped.',
+    phaseCodes: ['DATASOURCE_UPDATING'],
+  },
+  {
+    id: 'install',
+    label: 'Install deployment',
+    description: 'Installs the prepared exploded WAR into the profile deployment location.',
+    phaseCodes: ['ARCHIVE_INSTALLING', 'ARCHIVE_INSTALLED'],
+  },
+  {
+    id: 'start',
+    label: 'Start profile',
+    description: 'Starts WildFly for the profile with the new deployment.',
+    phaseCodes: ['PROFILE_STARTING'],
+  },
+  {
+    id: 'wait',
+    label: 'Wait for WildFly',
+    description: 'Waits for WildFly to report the deployment marker / result.',
+    phaseCodes: ['DEPLOYMENT_MARKER_WAIT'],
+  },
+  {
+    id: 'health',
+    label: 'Verify health',
+    description: 'Checks that the application is healthy after startup.',
+    phaseCodes: ['HEALTH_VERIFYING'],
+  },
 ];
 
 export const qcWarPhase = (phaseCode: string | null | undefined): QcWarPhase | null =>
