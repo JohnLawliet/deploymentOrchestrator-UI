@@ -12,6 +12,7 @@ import { normalizeRuntimeActivity, overlayRuntimeActivity } from '@/lib/runtimeA
 import { usePortal } from '@/context/PortalContext';
 import JarFrontendDetails, { hasAuthoritativeFrontendAssociation } from '@/components/JarFrontendDetails';
 import LockNotice from '@/components/LockNotice';
+import PageTutorial from '@/components/PageTutorial';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -20,6 +21,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { FormItem, FormLabel } from '@/components/ui/form';
 import { Choice, Field, Notice, Page } from '@/components/PagePrimitives';
 import type { LockScope } from '@/lib/collaborationState';
+import { jarTutorialSteps } from '@/lib/pageTutorials';
 
 const FRONTEND_MODES = { REUSE: 'REUSE_ASSOCIATION', DEPLOY: 'DEPLOY' } as const;
 type FrontendMode = (typeof FRONTEND_MODES)[keyof typeof FRONTEND_MODES] | null;
@@ -28,6 +30,23 @@ const frontendModeOptions: ReadonlyArray<readonly [Exclude<FrontendMode, null>, 
   [FRONTEND_MODES.DEPLOY, 'Deploy to frontend'],
 ];
 type ApplicationSelection = { type: 'existing'; id: string; name: string } | { type: 'new'; name: string };
+type TutorialFormState = {
+  applicationName: string;
+  applicationSelection: ApplicationSelection | null;
+  source: string[];
+  provideScript: boolean;
+  javaPath: string;
+  includeFrontend: boolean;
+  frontendMode: FrontendMode;
+  frontendSources: string[];
+  confirmReassociation: boolean;
+  port: string;
+  portTouched: boolean;
+  healthUrl: string;
+  frontendQuery: string;
+  frontendProfileUuid: string;
+  frontendSelectionStale: boolean;
+};
 const normalized = (value: unknown) =>
   String(value || '')
     .trim()
@@ -77,9 +96,11 @@ export default function JarDeploymentPage() {
   const [error, setError] = useState('');
   const [structuredDeploymentError, setStructuredDeploymentError] = useState(false);
   const [pendingOperationId, setPendingOperationId] = useState('');
+  const [tutorialActive, setTutorialActive] = useState(false);
   const submissionGuard = useRef(false);
   const portRequestSequence = useRef(0);
   const pendingSnapshotRevision = useRef(0);
+  const tutorialFormState = useRef<TutorialFormState | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -117,6 +138,7 @@ export default function JarDeploymentPage() {
   const active = activity?.status === 'ACTIVE';
   const profileBusy = ['STARTING', 'STOPPING', 'DEPLOYING'].includes(activity?.status ?? '');
   const frontendProfiles = useMemo(() => Object.values(frontendProfileActivityMap || {}), [frontendProfileActivityMap]);
+  const firstFrontendProfile = frontendProfiles[0];
   const selectedFrontend = frontendProfiles.find((profile) => profile.profileUuid === frontendProfileUuid);
   const frontendAssociation = activity && hasAuthoritativeFrontendAssociation(activity) ? activity.frontendProfile : null;
   const selectedFrontendOwnerMatches =
@@ -329,6 +351,7 @@ export default function JarDeploymentPage() {
       portChecking ||
       !portStatus?.deploymentAllowed ||
       !frontendProfileValid ||
+      tutorialActive ||
       submitting ||
       pendingOperationId ||
       profileBusy ||
@@ -397,6 +420,105 @@ export default function JarDeploymentPage() {
     }
   };
 
+  const startJarTutorial = useCallback(() => {
+    tutorialFormState.current = {
+      applicationName,
+      applicationSelection,
+      source: [...source],
+      provideScript,
+      javaPath,
+      includeFrontend,
+      frontendMode,
+      frontendSources: [...frontendSources],
+      confirmReassociation,
+      port,
+      portTouched,
+      healthUrl,
+      frontendQuery,
+      frontendProfileUuid,
+      frontendSelectionStale,
+    };
+    setTutorialActive(true);
+  }, [
+    applicationName,
+    applicationSelection,
+    confirmReassociation,
+    frontendMode,
+    frontendProfileUuid,
+    frontendQuery,
+    frontendSelectionStale,
+    frontendSources,
+    healthUrl,
+    includeFrontend,
+    javaPath,
+    port,
+    portTouched,
+    provideScript,
+    source,
+  ]);
+
+  const resetJarTutorial = useCallback(() => {
+    const saved = tutorialFormState.current;
+    tutorialFormState.current = null;
+    setTutorialActive(false);
+    if (!saved) return;
+    setApplicationName(saved.applicationName);
+    setApplicationSelection(saved.applicationSelection);
+    setSource(saved.source);
+    setProvideScript(saved.provideScript);
+    setJavaPath(saved.javaPath);
+    setIncludeFrontend(saved.includeFrontend);
+    setFrontendMode(saved.frontendMode);
+    setFrontendSources(saved.frontendSources);
+    setConfirmReassociation(saved.confirmReassociation);
+    setPort(saved.port);
+    setPortTouched(saved.portTouched);
+    setHealthUrl(saved.healthUrl);
+    setFrontendQuery(saved.frontendQuery);
+    setFrontendProfileUuid(saved.frontendProfileUuid);
+    setFrontendSelectionStale(saved.frontendSelectionStale);
+  }, []);
+
+  const changeJarTutorialStep = useCallback(
+    (index: number) => {
+      if (!tutorialFormState.current) return;
+      if (index === 2 || index === 3 || index === 4 || index === 5 || index === 6) {
+        setProvideScript(true);
+        return;
+      }
+      if (index === 7) {
+        setProvideScript(false);
+        return;
+      }
+      if (index === 8) {
+        setIncludeFrontend(true);
+        setFrontendMode(null);
+        setConfirmReassociation(false);
+        return;
+      }
+      if (index === 9) {
+        setIncludeFrontend(true);
+        setFrontendMode(FRONTEND_MODES.DEPLOY);
+        setConfirmReassociation(false);
+        return;
+      }
+      if (index === 10 || index === 11 || index === 12 || index === 13) {
+        setIncludeFrontend(true);
+        setFrontendMode(FRONTEND_MODES.DEPLOY);
+        setConfirmReassociation(false);
+        if (firstFrontendProfile) {
+          setFrontendProfileUuid(firstFrontendProfile.profileUuid);
+          setFrontendQuery(firstFrontendProfile.profileName);
+          setFrontendSelectionStale(false);
+        } else {
+          setFrontendProfileUuid('');
+          setFrontendQuery('');
+        }
+      }
+    },
+    [firstFrontendProfile],
+  );
+
   const formInvalid =
     !applicationCommitted ||
     !applicationNameValid ||
@@ -407,9 +529,21 @@ export default function JarDeploymentPage() {
     !portStatus?.deploymentAllowed ||
     !frontendProfileValid ||
     !!jarLock;
+  const formDisabled = tutorialActive || submitting || !!pendingOperationId;
 
   return (
-    <Page title="Deploy JAR" description="Deploy a backend application from a JAR in your Tech Drive.">
+    <Page
+      title="Deploy JAR"
+      description="Deploy a backend application from a JAR in your Tech Drive."
+      headerAction={
+        <PageTutorial
+          steps={jarTutorialSteps}
+          onStart={startJarTutorial}
+          onReset={resetJarTutorial}
+          onStepChange={changeJarTutorialStep}
+        />
+      }
+    >
       <Card className="w-full shadow-glow">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -423,14 +557,14 @@ export default function JarDeploymentPage() {
         <CardContent>
           <form onSubmit={submit} className="space-y-5">
             <LockNotice lock={jarLock} />
-            <div>
+            <div data-tour="jar-source">
               <p className="text-sm font-medium mb-2">JAR from Tech Drive</p>
               <FileBrowser
                 rootKey="techDrive"
                 selectableExtension=".jar"
                 selected={source}
                 onSelectionChange={selectSource}
-                disabled={submitting || !!pendingOperationId}
+                disabled={formDisabled}
               />
               {source[0] && (
                 <p className="help mt-2">
@@ -438,31 +572,39 @@ export default function JarDeploymentPage() {
                 </p>
               )}
             </div>
-            <div className="grid gap-4 md:grid-cols-2 md:items-end">
-              <Field label="Application name (required)">
-                <Input
-                  readOnly
-                  value={applicationName}
-                  placeholder="Select a Jar from techDrive"
-                  aria-label="Application name (required)"
-                  disabled={submitting || !!pendingOperationId}
-                />
-              </Field>
+            <div className="grid gap-4 md:grid-cols-2 md:items-end" data-tour="jar-runtime">
+              <div data-tour="jar-application-name">
+                <Field label="Application name (required)">
+                  <Input
+                    readOnly
+                    value={applicationName}
+                    placeholder="Select a Jar from techDrive"
+                    aria-label="Application name (required)"
+                    disabled={formDisabled}
+                  />
+                </Field>
+              </div>
               <Choice
                 label="Provide launcher settings?"
                 value={provideScript}
                 onChange={setProvideScript}
                 yes="Yes, include launcher settings"
-                no="No, use backend defaults"
+                no="No, reuse existing launcher"
+                yesDataTour="jar-launcher-yes"
+                noDataTour="jar-launcher-no"
+                disabled={formDisabled}
               />
             </div>
-            <Field label="Health URL (optional)">
-              <Input
-                value={healthUrl}
-                onChange={(event) => setHealthUrl(event.target.value)}
-                placeholder="https://application.example/actuator/health"
-              />
-            </Field>
+            <div data-tour="jar-health-url">
+              <Field label="Health URL (optional)">
+                <Input
+                  value={healthUrl}
+                  onChange={(event) => setHealthUrl(event.target.value)}
+                  placeholder="https://application.example/actuator/health"
+                  disabled={formDisabled}
+                />
+              </Field>
+            </div>
             {source[0] && (!applicationNameValid || !applicationCommitted) && (
               <Notice tone="error">
                 {!applicationNameValid
@@ -525,7 +667,7 @@ export default function JarDeploymentPage() {
                 {portStatus.jarName ? `JAR: ${portStatus.jarName}. ` : ''}Free this port before deploying.
               </Notice>
             )}
-            <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
+            <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4" data-tour="jar-launcher-preview">
               <Field label={provideScript ? 'Launcher script to save alongside the JAR' : 'Existing launcher script'}>
                 <textarea
                   className="form-control min-h-28 font-mono text-sm"
@@ -562,31 +704,38 @@ export default function JarDeploymentPage() {
             </div>
             {provideScript && (
               <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Port number (required)">
-                  <Input
-                    type="number"
-                    min="1"
-                    max="65535"
-                    step="1"
-                    required
-                    value={port}
-                    onChange={(event) => setPort(event.target.value)}
-                    onBlur={() => setPortTouched(true)}
-                  />
-                </Field>
-                <Field label="Java path in QC (optional)">
-                  <Input
-                    value={javaPath}
-                    onChange={(event) => setJavaPath(event.target.value)}
-                    placeholder="C:\\Program Files\\Java\\jdk-21\\bin\\java.exe"
-                  />
-                </Field>
+                <div data-tour="jar-port">
+                  <Field label="Port number (required)">
+                    <Input
+                      type="number"
+                      min="1"
+                      max="65535"
+                      step="1"
+                      required
+                      value={port}
+                      onChange={(event) => setPort(event.target.value)}
+                      onBlur={() => setPortTouched(true)}
+                      disabled={formDisabled}
+                    />
+                  </Field>
+                </div>
+                <div data-tour="jar-java-path">
+                  <Field label="Java path in QC (optional)">
+                    <Input
+                      value={javaPath}
+                      onChange={(event) => setJavaPath(event.target.value)}
+                      placeholder="C:\\Program Files\\Java\\jdk-21\\bin\\java.exe"
+                      disabled={formDisabled}
+                    />
+                  </Field>
+                </div>
               </div>
             )}
-            <Label className="flex items-start gap-3 rounded-md border p-3">
+            <Label className="flex items-start gap-3 rounded-md border p-3" data-tour="jar-frontend-toggle">
               <Checkbox
                 aria-label="Include frontend"
                 checked={includeFrontend}
+                disabled={formDisabled}
                 onCheckedChange={(checked) => {
                   setIncludeFrontend(checked === true);
                   setFrontendMode(null);
@@ -607,7 +756,7 @@ export default function JarDeploymentPage() {
             </Label>
             {includeFrontend && (
               <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-4">
-                <fieldset>
+                <fieldset data-tour="jar-frontend-modes" disabled={formDisabled}>
                   <legend className="text-sm font-medium mb-2">Frontend deployment mode (required)</legend>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {frontendModeOptions.map(([mode, label]) => (
@@ -637,50 +786,56 @@ export default function JarDeploymentPage() {
                   </Notice>
                 )}
                 {frontendMode === FRONTEND_MODES.DEPLOY && (
-                  <div className="space-y-4">
-                    <FormItem>
-                      <FormLabel>Frontend profile (required)</FormLabel>
-                      <SearchableProfileSelect
-                        profiles={frontendProfiles}
-                        value={frontendQuery}
-                        onValueChange={(value) => {
-                          setFrontendQuery(value);
-                          setFrontendProfileUuid('');
-                          setConfirmReassociation(false);
-                        }}
-                        onSelect={(profile) => {
-                          setFrontendProfileUuid(profile.profileUuid);
-                          setFrontendQuery(profile.profileName);
-                          setFrontendSelectionStale(false);
-                          setConfirmReassociation(false);
-                        }}
-                        getKey={(profile) => profile.profileUuid}
-                        getLabel={(profile) => profile.profileName}
-                        getDescription={(profile) =>
-                          [
-                            `Port ${profile.port}`,
-                            profile.applicationName ? `JAR ${profile.jarName || profile.applicationName}` : 'Unassociated',
-                          ].join(' · ')
-                        }
-                        getSearchText={(profile) =>
-                          `${profile.profileName} ${profile.port} ${profile.frontendUrl || ''} ${profile.applicationName || ''} ${profile.jarName || ''}`
-                        }
-                        ariaLabel="Select frontend profile"
-                        inputAriaLabel="Frontend profile name, port, URL, or JAR"
-                        className="w-full justify-between font-normal sm:w-96"
-                        disabled={submitting || !!pendingOperationId}
-                      />
-                    </FormItem>
+                    <div className="space-y-4">
+                    <div data-tour="jar-frontend-profile">
+                      <FormItem>
+                        <FormLabel>Frontend profile (required)</FormLabel>
+                        <SearchableProfileSelect
+                          profiles={frontendProfiles}
+                          value={frontendQuery}
+                          onValueChange={(value) => {
+                            setFrontendQuery(value);
+                            setFrontendProfileUuid('');
+                            setConfirmReassociation(false);
+                          }}
+                          onSelect={(profile) => {
+                            setFrontendProfileUuid(profile.profileUuid);
+                            setFrontendQuery(profile.profileName);
+                            setFrontendSelectionStale(false);
+                            setConfirmReassociation(false);
+                          }}
+                          getKey={(profile) => profile.profileUuid}
+                          getLabel={(profile) => profile.profileName}
+                          getDescription={(profile) =>
+                            [
+                              `Port ${profile.port}`,
+                              profile.applicationName ? `JAR ${profile.jarName || profile.applicationName}` : 'Unassociated',
+                            ].join(' · ')
+                          }
+                          getSearchText={(profile) =>
+                            `${profile.profileName} ${profile.port} ${profile.frontendUrl || ''} ${profile.applicationName || ''} ${profile.jarName || ''}`
+                          }
+                          ariaLabel="Select frontend profile"
+                          inputAriaLabel="Frontend profile name, port, URL, or JAR"
+                          className="w-full justify-between font-normal sm:w-96"
+                          disabled={formDisabled}
+                        />
+                      </FormItem>
+                    </div>
                     {!selectedFrontend && <p className="field-error">Select an available frontend profile.</p>}
-                    {selectedFrontend && (
-                      <JarFrontendDetails
-                        activity={{
-                          id: selectedFrontend.profileUuid,
-                          frontendProfile: selectedFrontend,
-                          frontendUrl: selectedFrontend.frontendUrl,
-                        }}
-                      />
-                    )}
+                    <div data-tour="jar-frontend-details">
+                      {selectedFrontend ? (
+                        <JarFrontendDetails
+                          activity={{
+                            id: selectedFrontend.profileUuid,
+                            frontendProfile: selectedFrontend,
+                            frontendUrl: selectedFrontend.frontendUrl,
+                          }}
+                        />
+                      ) : (
+                        <p className="help">Select a frontend profile to view its URL, status, current JAR, and DocumentRoot.</p>
+                      )}
+                    </div>
                     {reassociationRequired && (
                       <Notice tone="warning">
                         This frontend profile is currently associated with{' '}
@@ -692,19 +847,20 @@ export default function JarDeploymentPage() {
                         <Checkbox
                           aria-label="Confirm frontend reassociation"
                           checked={confirmReassociation}
+                          disabled={formDisabled}
                           onCheckedChange={(checked) => setConfirmReassociation(checked === true)}
                         />
                         Confirm reassociation from {selectedFrontend?.jarName || selectedFrontend?.applicationName}
                       </Label>
                     )}
-                    <div>
+                    <div data-tour="jar-frontend-sources">
                       <p className="text-sm font-medium mb-2">Frontend production build from Tech Drive</p>
                       <FileBrowser
                         rootKey="techDrive"
                         showSelectAll
                         selected={frontendSources}
                         onSelectionChange={setFrontendSources}
-                        disabled={submitting || !!pendingOperationId}
+                        disabled={formDisabled}
                       />
                       {frontendSources.length > 0 && (
                         <p className="help mt-2">{frontendSources.length} file(s) or folder(s) selected.</p>
@@ -719,7 +875,12 @@ export default function JarDeploymentPage() {
             )}
             {submitting && <Notice>Verifying resources, acquiring deployment locks, and starting the operation…</Notice>}
             {error && <Notice tone="error">{structuredDeploymentError ? <strong>{error}</strong> : error}</Notice>}
-            <Button type="submit" disabled={formInvalid || submitting || !!pendingOperationId || profileBusy} className="gap-2">
+            <Button
+              type="submit"
+              disabled={formInvalid || formDisabled || profileBusy}
+              className="gap-2"
+              data-tour="jar-deploy"
+            >
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
               {submitting ? 'Verifying and locking…' : 'Deploy JAR'}
             </Button>

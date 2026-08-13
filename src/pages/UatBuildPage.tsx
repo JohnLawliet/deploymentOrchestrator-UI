@@ -6,6 +6,7 @@ import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { Check, ChevronDown, Clipboard, FolderArchive, Loader2, LockKeyhole } from 'lucide-react';
 import FileBrowser from '@/components/FileBrowser';
 import LockNotice from '@/components/LockNotice';
+import PageTutorial from '@/components/PageTutorial';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -14,6 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Notice, Page } from '@/components/PagePrimitives';
 import { usePortal } from '@/context/PortalContext';
+import { uatBuildTutorialSteps } from '@/lib/pageTutorials';
 import {
   convertUatBuild,
   getFileRoots,
@@ -379,6 +381,7 @@ export default function UatBuildPage() {
     <Page
       title="Create UAT build"
       description="Combine UAT configuration with a Jenkins exploded WAR, package the result, and generate its SHA-256 hash."
+      headerAction={<PageTutorial steps={uatBuildTutorialSteps} />}
     >
       <div className="space-y-4">
         {notice && <Notice tone="warning">{notice}</Notice>}
@@ -388,6 +391,7 @@ export default function UatBuildPage() {
         <StepCard
           number={1}
           title="Select build inputs"
+          tour="uat-inputs"
           active={activeStep === 1}
           available={!operationId}
           onOpen={() => setActiveStep(1)}
@@ -472,7 +476,7 @@ export default function UatBuildPage() {
               <p className="text-xs text-muted-foreground">
                 The backend will exclusively lock both selected paths for the returned duration.
               </p>
-              <Button type="button" className="gap-2" disabled={!canPreflight} onClick={runPreflight}>
+              <Button type="button" className="gap-2" disabled={!canPreflight} onClick={runPreflight} data-tour="uat-inspect">
                 {preflightState === 'loading' ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
@@ -487,6 +491,7 @@ export default function UatBuildPage() {
         <StepCard
           number={2}
           title="Review UAT build"
+          tour="uat-review"
           active={activeStep === 2}
           available={!!preflight || !!operationId || conversionState === 'failed'}
           onOpen={() => setActiveStep(2)}
@@ -578,7 +583,7 @@ export default function UatBuildPage() {
                     ? 'All blocking decisions are complete.'
                     : 'Select one candidate for every duplicate filename.'}
               </p>
-              <Button type="button" className="gap-2" disabled={!canConvert} onClick={convert}>
+              <Button type="button" className="gap-2" disabled={!canConvert} onClick={convert} data-tour="uat-convert">
                 {['starting', 'running'].includes(conversionState) ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
@@ -593,6 +598,7 @@ export default function UatBuildPage() {
         <StepCard
           number={3}
           title="Copy OPM message"
+          tour="uat-opm"
           active={activeStep === 3}
           available={!!result}
           onOpen={() => setActiveStep(3)}
@@ -641,6 +647,7 @@ function StepCard({
   available,
   onOpen,
   summary,
+  tour,
   children,
 }: {
   number: number;
@@ -649,10 +656,11 @@ function StepCard({
   available: boolean;
   onOpen: () => void;
   summary: string;
+  tour?: string;
   children: ReactNode;
 }) {
   return (
-    <Card className={active ? 'border-primary/40 shadow-glow' : ''}>
+    <Card className={active ? 'border-primary/40 shadow-glow' : ''} data-tour={tour}>
       <button
         type="button"
         className="flex w-full items-center gap-4 p-5 text-left disabled:cursor-not-allowed disabled:opacity-60"

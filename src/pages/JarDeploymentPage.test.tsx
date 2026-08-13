@@ -26,6 +26,11 @@ type SelectProps = {
   ariaLabel?: string;
   createOptionLabel?: string;
 };
+type PageTutorialProps = {
+  onStart?: () => void;
+  onReset?: () => void;
+  onStepChange?: (index: number) => void;
+};
 
 const api = vi.hoisted(() => ({
   deployJar: vi.fn(),
@@ -89,6 +94,36 @@ vi.mock('@/components/SearchableProfileSelect', () => ({
           Select {getLabel(profile)}
         </button>
       ))}
+    </div>
+  ),
+}));
+vi.mock('@/components/PageTutorial', () => ({
+  default: ({ onStart, onReset, onStepChange }: PageTutorialProps) => (
+    <div>
+      <button
+        type="button"
+        onClick={() => {
+          onStart?.();
+          onStepChange?.(0);
+        }}
+      >
+        Start JAR tutorial
+      </button>
+      <button type="button" onClick={() => onStepChange?.(2)}>
+        Tutorial launcher settings
+      </button>
+      <button type="button" onClick={() => onStepChange?.(7)}>
+        Tutorial reuse launcher
+      </button>
+      <button type="button" onClick={() => onStepChange?.(10)}>
+        Tutorial frontend profile
+      </button>
+      <button type="button" onClick={() => onStepChange?.(11)}>
+        Tutorial frontend details
+      </button>
+      <button type="button" onClick={() => onReset?.()}>
+        Finish JAR tutorial
+      </button>
     </div>
   ),
 }));
@@ -220,6 +255,39 @@ describe('JarDeploymentPage port contract', () => {
 
     expect(screen.getByRole('button', { name: 'Deploy JAR' })).toBeEnabled();
     expect(api.getPortStatus).toHaveBeenCalledWith(8087, 'orders', expect.any(AbortSignal));
+  });
+
+  it('auto-demonstrates launcher and frontend controls without changing the user form after the tutorial ends', async () => {
+    const user = userEvent.setup();
+    render(<JarDeploymentPage />);
+    await selectExistingJar(user);
+    await user.type(screen.getByLabelText('Port number (required)'), '8087');
+    await waitForAvailablePort();
+    await user.type(screen.getByLabelText('Health URL (optional)'), 'https://orders.example/health');
+
+    const deploy = screen.getByRole('button', { name: 'Deploy JAR' });
+    expect(deploy).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Start JAR tutorial' }));
+    expect(deploy).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial reuse launcher' }));
+    expect(screen.getByLabelText('No, reuse existing launcher')).toBeChecked();
+    expect(screen.queryByLabelText('Port number (required)')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial frontend profile' }));
+    expect(screen.getByLabelText('Include frontend')).toBeChecked();
+    expect(screen.getByLabelText('Deploy to frontend')).toBeChecked();
+    expect(screen.getByText('orders-ui')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial frontend details' }));
+    expect(screen.getByText('Document root')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Finish JAR tutorial' }));
+
+    expect(screen.getByLabelText('Yes, include launcher settings')).toBeChecked();
+    expect(screen.getByLabelText('Port number (required)')).toHaveValue(8087);
+    expect(screen.getByLabelText('Health URL (optional)')).toHaveValue('https://orders.example/health');
+    expect(screen.getByLabelText('Include frontend')).not.toBeChecked();
+    await waitFor(() => expect(deploy).toBeEnabled());
   });
 
   it('auto-selects an existing catalogue application when the derived JAR name matches', async () => {
@@ -474,6 +542,18 @@ describe('JarDeploymentPage port contract', () => {
       await screen.findByText('The selected frontend profile is no longer available. Select another profile.'),
     ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Deploy JAR' })).toBeDisabled();
+  });
+
+  it('keeps the frontend-profile tour target honest when the snapshot has no profiles', async () => {
+    portal.frontendProfileActivityMap = {};
+    const user = userEvent.setup();
+    render(<JarDeploymentPage />);
+
+    await user.click(screen.getByRole('button', { name: 'Start JAR tutorial' }));
+    await user.click(screen.getByRole('button', { name: 'Tutorial frontend profile' }));
+
+    expect(screen.getByText('Select an available frontend profile.')).toBeVisible();
+    expect(screen.getByText('Select a frontend profile to view its URL, status, current JAR, and DocumentRoot.')).toBeVisible();
   });
 
   it('sends a trimmed health URL as an optional top-level property', async () => {

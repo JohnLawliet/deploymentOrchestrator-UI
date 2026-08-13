@@ -50,6 +50,7 @@ import type {
   OperationMap,
   OperationRecord,
   OperationToast,
+  SystemToast,
   ProfileLogMap,
   RuntimeActivityModel,
 } from '@/types/frontend';
@@ -92,11 +93,16 @@ type PortalContextValue = ActivityMaps & {
   reportInteraction: () => boolean;
   operationToasts: OperationToast[];
   dismissOperationToast: (id: string) => void;
+  systemToasts: SystemToast[];
+  dismissSystemToast: (id: string) => void;
 };
 
 const PortalContext = createContext<PortalContextValue | null>(null);
 const allowedSystemEventTypes: Set<SystemEvent['eventType']> = new Set([
   'SYSTEM_SNAPSHOT',
+  'FRONTEND_ASSOCIATION_UPDATED',
+  'RUNTIME_RECONCILIATION_ISSUES',
+  'RUNTIME_RECONCILIATION_RECOVERED',
   'OPERATION_PROGRESS',
   'USER_PRESENCE_CHANGED',
   'LOCK_CHANGED',
@@ -149,10 +155,18 @@ const eventStatuses = {
   RESOURCE_FAILED: 'FAILED',
 };
 const resourceStates = new Set(['INACTIVE', 'STARTING', 'ACTIVE', 'STOPPING', 'DEPLOYING', 'FAILED']);
+const systemEventScopes = new Set<SystemEvent['scope']>(['SYSTEM', 'RESOURCE', 'USER', 'OPERATION']);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const isNullableString = (value: unknown): value is string | null => value == null || typeof value === 'string';
 const isNullableNumber = (value: unknown): value is number | null => value == null || typeof value === 'number';
+const isFrontendProfileActivity = (value: unknown): value is FrontendProfileActivity =>
+  isRecord(value) && typeof value.profileUuid === 'string' && typeof value.profileName === 'string' && typeof value.port === 'number';
+const isJarProfileActivity = (value: unknown): value is JarProfileActivity =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  Object.prototype.hasOwnProperty.call(value, 'frontendProfile') &&
+  (value.frontendProfile === null || isFrontendProfileActivity(value.frontendProfile));
 const isProfileLogEvent = (value: unknown): value is ProfileLogEvent =>
   isRecord(value) &&
   typeof value.profileId === 'string' &&
@@ -161,7 +175,12 @@ const isProfileLogEvent = (value: unknown): value is ProfileLogEvent =>
   typeof value.replay === 'boolean' &&
   isNullableString(value.boundaryReason);
 const isSystemEvent = (value: unknown): value is SystemEvent => {
-  if (!isRecord(value) || !allowedSystemEventTypes.has(value.eventType as SystemEvent['eventType'])) return false;
+  if (
+    !isRecord(value) ||
+    !allowedSystemEventTypes.has(value.eventType as SystemEvent['eventType']) ||
+    !systemEventScopes.has(value.scope as SystemEvent['scope'])
+  )
+    return false;
   if (
     typeof value.timestamp !== 'string' ||
     !isNullableString(value.deploymentId) ||
@@ -192,6 +211,20 @@ const isSystemEvent = (value: unknown): value is SystemEvent => {
         Array.isArray(resources.onlineUsers) &&
         Array.isArray(resources.locks)
       );
+    case 'FRONTEND_ASSOCIATION_UPDATED':
+      return (
+        value.scope === 'SYSTEM' &&
+        isRecord(resources) &&
+        typeof resources.deploymentId === 'string' &&
+        typeof resources.jarProfileUuid === 'string' &&
+        typeof resources.frontendProfileUuid === 'string' &&
+        isFrontendProfileActivity(resources.frontendProfile) &&
+        isJarProfileActivity(resources.jarProfile)
+      );
+    case 'RUNTIME_RECONCILIATION_ISSUES':
+      return Array.isArray(resources);
+    case 'RUNTIME_RECONCILIATION_RECOVERED':
+      return resources === null;
     case 'OPERATION_PROGRESS':
       return (
         isRecord(resources) &&
@@ -255,6 +288,27 @@ export function buildActivityMapsFromSnapshot(resources: SystemSnapshot, current
     frontendProfileActivityMap: Array.isArray(resources?.frontendProfiles)
       ? mapFrontendProfiles(snapshot.frontendProfiles)
       : current.frontendProfileActivityMap,
+  };
+}
+
+type FrontendAssociationEvent = Extract<SystemEvent, { eventType: 'FRONTEND_ASSOCIATION_UPDATED' }>;
+
+const sameJsonValue = (left: unknown, right: unknown) => left === right || JSON.stringify(left) === JSON.stringify(right);
+
+export function applyFrontendAssociationUpdate(current: ActivityMaps, event: FrontendAssociationEvent): ActivityMaps {
+  const { frontendProfile, jarProfile } = event.resources;
+  const normalizedJar = normalizeRuntimeActivity(jarProfile);
+  if (!normalizedJar) return current;
+  const jarActivity: RuntimeActivityModel = { ...normalizedJar, frontendProfile: jarProfile.frontendProfile };
+  const frontendChanged = !sameJsonValue(current.frontendProfileActivityMap[frontendProfile.profileUuid], frontendProfile);
+  const jarChanged = !sameJsonValue(current.jarProfileActivityMap[jarProfile.id], jarActivity);
+  if (!frontendChanged && !jarChanged) return current;
+  return {
+    ...current,
+    frontendProfileActivityMap: frontendChanged
+      ? { ...current.frontendProfileActivityMap, [frontendProfile.profileUuid]: frontendProfile }
+      : current.frontendProfileActivityMap,
+    jarProfileActivityMap: jarChanged ? { ...current.jarProfileActivityMap, [jarProfile.id]: jarActivity } : current.jarProfileActivityMap,
   };
 }
 
@@ -436,12 +490,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const [presenceState, setPresenceState] = useState(() => replacePresence([]));
   const [lockState, setLockState] = useState(() => replaceLocks([]));
   const [operationToasts, setOperationToasts] = useState<OperationToast[]>([]);
+  const [systemToasts, setSystemToasts] = useState<SystemToast[]>([]);
   const mapsRef = useRef(activityMaps);
   const operationsRef = useRef(operations);
   const completionKeysRef = useRef<string[]>([]);
   const lastActivityReportRef = useRef<number | null>(null);
   const lockLabelsRef = useRef<Record<string, string>>({});
   const lockLabelOrderRef = useRef<string[]>([]);
+  const systemToastSequenceRef = useRef(0);
   useEffect(() => {
     mapsRef.current = activityMaps;
   }, [activityMaps]);
@@ -525,6 +581,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
 
   const dismissOperationToast = useCallback((id: string) => {
     setOperationToasts((current) => current.filter((toast) => toast.id !== id));
+  }, []);
+
+  const dismissSystemToast = useCallback((id: string) => {
+    setSystemToasts((current) => current.filter((toast) => toast.id !== id));
+  }, []);
+
+  const showSystemToast = useCallback((message: string | null, variant: SystemToast['variant']) => {
+    if (!message?.trim()) return;
+    const id = `system-${Date.now()}-${systemToastSequenceRef.current++}`;
+    setSystemToasts((current) => [...current, { id, message, variant }].slice(-5));
   }, []);
 
   const clearProfileLogs = useCallback((profileId: string) => {
@@ -621,6 +687,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return;
       }
       try {
+        if (event.scope === 'SYSTEM') {
+          if (event.eventType === 'RUNTIME_RECONCILIATION_ISSUES') showSystemToast(event.message, 'warning');
+          if (event.eventType === 'RUNTIME_RECONCILIATION_RECOVERED') showSystemToast(event.message, 'success');
+          if (event.eventType !== 'SYSTEM_SNAPSHOT' && event.eventType !== 'FRONTEND_ASSOCIATION_UPDATED') return;
+        }
         if (event.eventType === 'SYSTEM_SNAPSHOT') {
           const snapshot = normalizeSystemSnapshot(event.resources);
           const nextMaps = buildActivityMapsFromSnapshot(event.resources, mapsRef.current);
@@ -646,6 +717,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const snapshotLocks = Array.isArray(event.resources?.locks) ? event.resources.locks : [];
           setLockState(replaceLocks(snapshotLocks));
           snapshotLocks.forEach(rememberLockLabel);
+          setLastSystemEvent(event);
+          return;
+        }
+        if (event.eventType === 'FRONTEND_ASSOCIATION_UPDATED') {
+          setActivityMaps((current) => {
+            const nextMaps = applyFrontendAssociationUpdate(current, event);
+            mapsRef.current = nextMaps;
+            return nextMaps;
+          });
           setLastSystemEvent(event);
           return;
         }
@@ -776,6 +856,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     reconcileProfileActivity,
     reconcileResourceActivity,
     rememberLockLabel,
+    showSystemToast,
     updateOperations,
   ]);
 
@@ -790,6 +871,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setPresenceState(replacePresence([]));
     setLockState(replaceLocks([]));
     setOperationToasts([]);
+    setSystemToasts([]);
     completionKeysRef.current = [];
     lastActivityReportRef.current = null;
     lockLabelsRef.current = {};
@@ -850,6 +932,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       reportInteraction,
       operationToasts,
       dismissOperationToast,
+      systemToasts,
+      dismissSystemToast,
     }),
     [
       username,
@@ -878,6 +962,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       reportInteraction,
       operationToasts,
       dismissOperationToast,
+      systemToasts,
+      dismissSystemToast,
     ],
   );
   return <PortalContext.Provider value={value}>{children}</PortalContext.Provider>;

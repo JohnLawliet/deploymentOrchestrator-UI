@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, RotateCcw } from 'lucide-react';
 import { getWarSnapshots, isLockConflict, rollbackWar } from '@/lib/contractApi';
 import { isOperationTerminal } from '@/lib/operationProgress';
@@ -29,15 +29,21 @@ export default function RollbackButton({
   disabled = false,
   className = '',
   buttonClassName = '',
+  open: controlledOpen,
+  onOpenChange,
+  tourTarget,
 }: {
   profileId: string;
   profileName?: string;
   disabled?: boolean;
   className?: string;
   buttonClassName?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  tourTarget?: string;
 }) {
   const { registerOperation, operations } = usePortal();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<WarSnapshotSummary[]>([]);
   const [state, setState] = useState<AsyncState>('idle');
   const [error, setError] = useState('');
@@ -53,7 +59,8 @@ export default function RollbackButton({
       !isOperationTerminal(operation),
   );
 
-  const loadSnapshots = async () => {
+  const open = controlledOpen ?? uncontrolledOpen;
+  const loadSnapshots = useCallback(async () => {
     setState('loading');
     setError('');
     try {
@@ -65,11 +72,18 @@ export default function RollbackButton({
       setError(errorMessage(reason));
       setState('error');
     }
-  };
+  }, [profileId]);
+
+  const previousControlledOpen = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (controlledOpen === true && previousControlledOpen.current !== true) void loadSnapshots();
+    previousControlledOpen.current = controlledOpen;
+  }, [controlledOpen, loadSnapshots]);
 
   const changeOpen = (nextOpen: boolean) => {
-    setOpen(nextOpen);
-    if (nextOpen) void loadSnapshots();
+    if (controlledOpen === undefined) setUncontrolledOpen(nextOpen);
+    onOpenChange?.(nextOpen);
+    if (nextOpen && controlledOpen === undefined) void loadSnapshots();
   };
 
   const selectSnapshot = async (snapshot: WarSnapshotSummary) => {
@@ -83,7 +97,7 @@ export default function RollbackButton({
         `WILDFLY_PROFILE:${profileId}`,
         `Rollback WAR · ${profileName || profileId}`,
       );
-      setOpen(false);
+      changeOpen(false);
     } catch (reason: unknown) {
       setError(isLockConflict(reason) ? `Profile conflict: ${errorMessage(reason)}` : errorMessage(reason));
     } finally {
@@ -92,7 +106,7 @@ export default function RollbackButton({
   };
 
   return (
-    <div className={className}>
+    <div className={className} data-tour={tourTarget}>
       <Popover open={open} onOpenChange={changeOpen}>
         <PopoverTrigger asChild>
           <Button
@@ -117,6 +131,7 @@ export default function RollbackButton({
           sideOffset={8}
           collisionPadding={16}
           className="w-[min(34rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-auto p-2"
+          data-tour={tourTarget ? `${tourTarget}-popover` : undefined}
         >
           {state === 'loading' && (
             <p className="flex items-center gap-2 p-2 text-sm text-muted-foreground">

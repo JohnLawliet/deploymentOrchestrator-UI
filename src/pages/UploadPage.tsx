@@ -3,6 +3,7 @@ import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import { AlertTriangle, Check, CheckCircle2, FileCheck2, Loader2, RotateCcw, Upload, X, XCircle } from 'lucide-react';
 import FileBrowser from '@/components/FileBrowser';
 import LockNotice from '@/components/LockNotice';
+import PageTutorial from '@/components/PageTutorial';
 import SearchableProfileSelect from '@/components/SearchableProfileSelect';
 import { Notice, Page } from '@/components/PagePrimitives';
 import { Button } from '@/components/ui/button';
@@ -25,10 +26,23 @@ import {
 import type { UploadItem, UploadMode, UploadRequest, UploadResponse } from '@/types/api-contracts';
 import type { FrontendProfileActivityModel, RuntimeActivityModel } from '@/types/frontend';
 import { errorMessage } from '@/types/frontend';
+import { uploadTutorialSteps } from '@/lib/pageTutorials';
 
 type MainMode = '' | 'regular' | 'hotfix';
 type HotfixType = '' | 'frontend' | 'war';
 type StoredUploadOperation = Pick<UploadResponse, 'operationId' | 'mode'>;
+type UploadTutorialSnapshot = {
+  mainMode: MainMode;
+  hotfixType: HotfixType;
+  sources: string[];
+  qcDestination: string[];
+  frontendQuery: string;
+  frontendProfileUuid: string;
+  frontendSelectionStale: boolean;
+  wildflyQuery: string;
+  wildflyProfileId: string;
+  selectedTargets: Record<string, string>;
+};
 const list = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
 const basename = (path: string) =>
   String(path || '')
@@ -37,6 +51,26 @@ const basename = (path: string) =>
     .pop();
 const recoverableOperationError = (error: unknown) =>
   error !== null && typeof error === 'object' && 'status' in error && (error.status === 404 || error.status === 410);
+const tutorialFrontendProfile: FrontendProfileActivityModel = {
+  profileUuid: 'tutorial-frontend-profile',
+  profileName: 'Example frontend profile',
+  port: 8081,
+  documentRoot: 'C:\\xampp\\htdocs\\example-frontend',
+  frontendUrl: 'http://example-frontend.local',
+  health: 'FUNCTIONAL',
+  directoryExists: true,
+  running: true,
+};
+const tutorialWildflyProfile: RuntimeActivityModel = {
+  id: 'tutorial-wildfly-profile',
+  profileName: 'Example WildFly profile',
+  application: 'example-application',
+  version: 'wildfly-26',
+  status: 'ACTIVE',
+  health: 'FUNCTIONAL',
+};
+const tutorialFrontendSources = ['build/index.html', 'build/assets'];
+const tutorialWarSources = ['hotfix/WEB-INF/classes/application.properties', 'hotfix/public/logo.svg'];
 
 export default function UploadPage() {
   const { username, frontendProfileActivityMap, wildflyProfileActivityMap, lastSystemEvent, systemStatus, findConflictingLock } =
@@ -58,14 +92,25 @@ export default function UploadPage() {
   const [rollbackSource, setRollbackSource] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [tutorialActive, setTutorialActive] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState(0);
   const refreshTimer = useRef<number | null>(null);
   const previousSystemStatus = useRef(systemStatus);
   const operationRef = useRef<UploadResponse | null>(null);
+  const tutorialSnapshotRef = useRef<UploadTutorialSnapshot | null>(null);
 
   const frontendProfiles = useMemo(() => Object.values(frontendProfileActivityMap || {}), [frontendProfileActivityMap]);
   const wildflyProfiles = useMemo(() => Object.values(wildflyProfileActivityMap || {}), [wildflyProfileActivityMap]);
-  const selectedFrontend = frontendProfiles.find((profile) => profile.profileUuid === frontendProfileUuid);
-  const selectedWildfly = wildflyProfiles.find((profile) => profile.id === wildflyProfileId);
+  const selectableFrontendProfiles = useMemo(
+    () => (tutorialActive && !frontendProfiles.length ? [tutorialFrontendProfile] : frontendProfiles),
+    [frontendProfiles, tutorialActive],
+  );
+  const selectableWildflyProfiles = useMemo(
+    () => (tutorialActive && !wildflyProfiles.length ? [tutorialWildflyProfile] : wildflyProfiles),
+    [tutorialActive, wildflyProfiles],
+  );
+  const selectedFrontend = selectableFrontendProfiles.find((profile) => profile.profileUuid === frontendProfileUuid);
+  const selectedWildfly = selectableWildflyProfiles.find((profile) => profile.id === wildflyProfileId);
   const uploadMode: UploadMode | '' =
     mainMode === 'regular'
       ? UPLOAD_MODES.REGULAR
@@ -279,6 +324,84 @@ export default function UploadPage() {
     [],
   );
 
+  const selectTutorialFrontendProfile = useCallback(() => {
+    const profile = selectableFrontendProfiles[0] || tutorialFrontendProfile;
+    setFrontendProfileUuid(profile.profileUuid);
+    setFrontendQuery(profile.profileName);
+    setFrontendSelectionStale(false);
+  }, [selectableFrontendProfiles]);
+
+  const selectTutorialWildflyProfile = useCallback(() => {
+    const profile = selectableWildflyProfiles[0] || tutorialWildflyProfile;
+    setWildflyProfileId(profile.id);
+    setWildflyQuery(profile.profileName || profile.id);
+  }, [selectableWildflyProfiles]);
+
+  const startTutorial = useCallback(() => {
+    tutorialSnapshotRef.current = {
+      mainMode,
+      hotfixType,
+      sources,
+      qcDestination,
+      frontendQuery,
+      frontendProfileUuid,
+      frontendSelectionStale,
+      wildflyQuery,
+      wildflyProfileId,
+      selectedTargets,
+    };
+    setTutorialActive(true);
+    setTutorialStep(0);
+  }, [
+    frontendProfileUuid,
+    frontendQuery,
+    frontendSelectionStale,
+    hotfixType,
+    mainMode,
+    qcDestination,
+    selectedTargets,
+    sources,
+    wildflyProfileId,
+    wildflyQuery,
+  ]);
+
+  const showTutorialStep = useCallback((step: number): Promise<void> => {
+    setTutorialStep(step);
+    if (step === 1) {
+      setMainMode('hotfix');
+      setHotfixType('');
+    } else if (step === 2 || step === 3) {
+      setMainMode('hotfix');
+      setHotfixType('frontend');
+      selectTutorialFrontendProfile();
+      if (step === 3) setSources(tutorialFrontendSources);
+    } else if (step >= 4) {
+      setMainMode('hotfix');
+      setHotfixType('war');
+      selectTutorialWildflyProfile();
+      setSources(tutorialWarSources);
+    }
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+  }, [selectTutorialFrontendProfile, selectTutorialWildflyProfile]);
+
+  const resetTutorial = useCallback(() => {
+    const snapshot = tutorialSnapshotRef.current;
+    tutorialSnapshotRef.current = null;
+    setTutorialActive(false);
+    setTutorialStep(0);
+    if (!snapshot) return;
+    setMainMode(snapshot.mainMode);
+    setHotfixType(snapshot.hotfixType);
+    setSources(snapshot.sources);
+    setQcDestination(snapshot.qcDestination);
+    setFrontendQuery(snapshot.frontendQuery);
+    setFrontendProfileUuid(snapshot.frontendProfileUuid);
+    setFrontendSelectionStale(snapshot.frontendSelectionStale);
+    setWildflyQuery(snapshot.wildflyQuery);
+    setWildflyProfileId(snapshot.wildflyProfileId);
+    setSelectedTargets(snapshot.selectedTargets);
+  }, []);
+
   const confirmAbandonActive = () =>
     !running ||
     window.confirm(
@@ -393,7 +516,19 @@ export default function UploadPage() {
   const createEnabled = canCreate && !uploadLock;
 
   return (
-    <Page title="Upload" description="Move files from your Tech Drive to QC or apply a frontend or exploded-WAR hotfix.">
+    <Page
+      title="Upload"
+      description="Move files from your Tech Drive to QC or apply a frontend or exploded-WAR hotfix."
+      headerAction={
+        <PageTutorial
+          steps={uploadTutorialSteps}
+          disabled={!!operation}
+          onStart={startTutorial}
+          onStepPrepare={showTutorialStep}
+          onReset={resetTutorial}
+        />
+      }
+    >
       <div className="space-y-5">
         {notice && <Notice tone="warning">{notice}</Notice>}
         {frontendSelectionStale && (
@@ -408,289 +543,306 @@ export default function UploadPage() {
         )}
 
         <div className="grid grid-cols-2 items-start gap-3 md:gap-5" data-testid="upload-mode-row">
-          <ModeCard
-            title="Is this a hotfix?"
-            value={mainMode}
-            onChange={changeMainMode}
-            disabled={pending}
-            options={[
-              ['regular', 'Regular file upload'],
-              ['hotfix', 'This is a hotfix'],
-            ]}
-          />
-          {mainMode === 'hotfix' && (
+          <div data-tour="upload-hotfix-question">
             <ModeCard
-              title="Hotfix type"
-              value={hotfixType}
-              onChange={changeHotfixType}
-              disabled={pending}
+              title="Is this a hotfix?"
+              value={mainMode}
+              onChange={changeMainMode}
+              disabled={pending || tutorialActive}
               options={[
-                ['frontend', 'Frontend XAMPP'],
-                ['war', 'WAR profile'],
+                ['regular', 'Regular file upload'],
+                ['hotfix', 'This is a hotfix'],
               ]}
             />
+          </div>
+          {mainMode === 'hotfix' && (
+            <div data-tour="upload-hotfix-type">
+              <ModeCard
+                title="Hotfix type"
+                value={hotfixType}
+                onChange={changeHotfixType}
+                disabled={pending || tutorialActive}
+                options={[
+                  ['frontend', 'Frontend XAMPP'],
+                  ['war', 'WAR profile'],
+                ]}
+              />
+            </div>
           )}
         </div>
 
-        {!operation && uploadMode && (
-          <Card>
-            <CardContent className="space-y-5 pt-6">
-              {uploadMode === UPLOAD_MODES.REGULAR && (
-                <div className="grid gap-5 xl:grid-cols-2">
-                  <BrowserPanel title="Files and directories from Tech Drive" description="Select one or more source items.">
-                    <FileBrowser
-                      rootKey="techDrive"
-                      showSelectAll
-                      selected={sources}
-                      onSelectionChange={setSources}
-                      disabled={pending}
-                    />
-                  </BrowserPanel>
-                  <BrowserPanel title="QC destination" description="Select exactly one destination directory.">
-                    <FileBrowser
-                      rootKey="qc"
-                      selectableType="directory"
-                      selected={qcDestination}
-                      onSelectionChange={(items) => setQcDestination(items.slice(-1))}
-                      disabled={pending}
-                    />
-                  </BrowserPanel>
-                </div>
-              )}
+        <div data-tour="upload-workspace">
+          {!operation && uploadMode && (
+            <Card data-tour="upload-submit">
+              <CardContent className="space-y-5 pt-6">
+                {uploadMode === UPLOAD_MODES.REGULAR && (
+                  <div className="grid gap-5 xl:grid-cols-2">
+                    <BrowserPanel title="Files and directories from Tech Drive" description="Select one or more source items.">
+                      <FileBrowser
+                        rootKey="techDrive"
+                        showSelectAll
+                        selected={sources}
+                        onSelectionChange={setSources}
+                        disabled={pending || tutorialActive}
+                      />
+                    </BrowserPanel>
+                    <BrowserPanel title="QC destination" description="Select exactly one destination directory.">
+                      <FileBrowser
+                        rootKey="qc"
+                        selectableType="directory"
+                        selected={qcDestination}
+                        onSelectionChange={(items) => setQcDestination(items.slice(-1))}
+                        disabled={pending || tutorialActive}
+                      />
+                    </BrowserPanel>
+                  </div>
+                )}
 
-              {uploadMode === UPLOAD_MODES.FRONTEND_HOTFIX && (
-                <div className="space-y-5">
-                  <FormItem className="max-w-xl">
-                    <FormLabel>Frontend XAMPP profile</FormLabel>
-                    <SearchableProfileSelect<FrontendProfileActivityModel>
-                      profiles={frontendProfiles}
-                      value={frontendQuery}
-                      onValueChange={(value) => {
-                        setFrontendQuery(value);
-                        setFrontendProfileUuid('');
-                      }}
-                      onSelect={(profile) => {
-                        setFrontendProfileUuid(profile.profileUuid);
-                        setFrontendQuery(profile.profileName);
-                        setFrontendSelectionStale(false);
-                      }}
-                      getKey={(profile) => profile.profileUuid}
-                      getLabel={(profile) => profile.profileName}
-                      getDescription={(profile) =>
-                        [
-                          `Port ${profile.port}`,
-                          profile.health,
-                          profile.running === true ? 'Running' : profile.running === false ? 'Stopped' : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')
-                      }
-                      getSearchText={(profile) => `${profile.profileName} ${profile.port} ${profile.frontendUrl || ''}`}
-                      isDisabled={(profile) => profile.directoryExists === false}
-                      getDisabledReason={(profile) =>
-                        profile.directoryExists === false ? 'Document root directory is unavailable.' : ''
-                      }
-                      ariaLabel="Select frontend XAMPP profile"
-                      inputAriaLabel="Frontend profile name, port, or URL"
-                      disabled={pending}
-                    />
-                    {selectedFrontend?.documentRoot && (
-                      <FormDescription>
-                        Document root: <span className="font-mono text-foreground">{selectedFrontend.documentRoot}</span>
-                      </FormDescription>
-                    )}
-                    {selectedFrontend?.frontendUrl && (
-                      <FormDescription>
-                        URL:{' '}
-                        <a
-                          className="text-primary hover:underline"
-                          href={selectedFrontend.frontendUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {selectedFrontend.frontendUrl}
-                        </a>
-                      </FormDescription>
-                    )}
-                    {selectedFrontend && (
-                      <FormDescription>
-                        Health: <span className="text-foreground">{selectedFrontend.health ?? 'Unknown'}</span> · Apache:{' '}
-                        <span className="text-foreground">
-                          {selectedFrontend.running === true
-                            ? 'Running'
-                            : selectedFrontend.running === false
-                              ? 'Stopped'
-                              : 'Unknown'}
-                        </span>
-                      </FormDescription>
-                    )}
-                    {selectedFrontend?.healthReason && <p className="field-error">{selectedFrontend.healthReason}</p>}
-                  </FormItem>
-                  <Notice tone="warning">
-                    Select <strong>index.html</strong> and its sibling files/directories. Do not select their parent build
-                    directory, or index.html will be installed one level too deep.
-                  </Notice>
-                  <BrowserPanel
-                    title="Production build contents"
-                    description="Select index.html and the build content beside it."
-                  >
-                    <FileBrowser
-                      rootKey="techDrive"
-                      showSelectAll
-                      selected={sources}
-                      onSelectionChange={setSources}
-                      disabled={pending}
-                    />
-                  </BrowserPanel>
-                  {sources.length > 0 && !hasFrontendIndex && (
-                    <p className="field-error">Select the production build&apos;s top-level index.html.</p>
-                  )}
-                </div>
-              )}
-
-              {uploadMode === UPLOAD_MODES.WILDFLY_HOTFIX && (
-                <div className="space-y-5">
-                  <FormItem className="max-w-xl">
-                    <FormLabel>WildFly profile</FormLabel>
-                    <SearchableProfileSelect<RuntimeActivityModel>
-                      profiles={wildflyProfiles}
-                      value={wildflyQuery}
-                      onValueChange={(value) => {
-                        setWildflyQuery(value);
-                        if (!value) setWildflyProfileId('');
-                      }}
-                      onSelect={(profile) => {
-                        setWildflyProfileId(profile.id);
-                        setWildflyQuery(profile.profileName || profile.id);
-                      }}
-                      getLabel={(profile) => profile.profileName || profile.id}
-                      getDescription={(profile) =>
-                        [profile.application, profile.version, profile.status, profile.health].filter(Boolean).join(' · ')
-                      }
-                      getSearchText={(profile) =>
-                        `${profile.profileName || ''} ${profile.id} ${profile.application || ''} ${profile.version || ''}`
-                      }
-                      ariaLabel="Select WildFly profile"
-                      inputAriaLabel="WildFly profile name, application, version, or ID"
-                      disabled={pending}
-                    />
-                  </FormItem>
-                  <BrowserPanel title="Hotfix files and directories" description="Select one or more items from your Tech Drive.">
-                    <FileBrowser
-                      rootKey="techDrive"
-                      showSelectAll
-                      selected={sources}
-                      onSelectionChange={setSources}
-                      disabled={pending}
-                    />
-                  </BrowserPanel>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">Selected source items: {sources.length}</p>
-                <Button type="button" className="gap-2" disabled={!createEnabled || pending} onClick={create}>
-                  {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                  {uploadMode === UPLOAD_MODES.WILDFLY_HOTFIX
-                    ? pending
-                      ? 'Inspecting…'
-                      : 'Inspect hotfix'
-                    : pending
-                      ? 'Submitting…'
-                      : 'Upload'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {operation && (
-          <div className="grid gap-5 lg:grid-cols-2" data-testid="upload-results-layout">
-            <Card>
-              <CardContent className="space-y-4 pt-6">
-                <div>
-                  <h2 className="font-semibold">Selected upload</h2>
-                  <p className="text-xs text-muted-foreground">Operation {operationId}</p>
-                </div>
-                <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-2 text-sm">
-                  <dt className="text-muted-foreground">Mode</dt>
-                  <dd>{operation.mode}</dd>
-                  <dt className="text-muted-foreground">Target</dt>
-                  <dd className="break-all">{targetSummary || 'Resolved by the backend'}</dd>
-                </dl>
-                <div>
-                  <p className="mb-2 text-sm font-medium">Sources</p>
-                  <ul className="space-y-1">
-                    {(sources.length ? sources : list(operation.items).map((item) => item.sourcePath)).map((path) => (
-                      <li key={path} className="break-all rounded border border-border px-2 py-1.5 font-mono text-xs">
-                        {path}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="space-y-4 pt-6">
-                <div className="flex items-start justify-between gap-3">
-                  <h2 className="font-semibold">
-                    Operation progress<span className="sr-only">: {operation.status}</span>
-                  </h2>
-                  {(pending || refreshing) && (
-                    <Loader2 aria-label="Refreshing upload" className="h-4 w-4 animate-spin text-primary" />
-                  )}
-                </div>
-                {operation.status === 'FAILED' && operation.message && <Notice tone="error">{operation.message}</Notice>}
-                {operation.mode === UPLOAD_MODES.FRONTEND_HOTFIX &&
-                  operation.status === 'COMPLETED' &&
-                  selectedFrontend?.documentRoot && (
-                    <Notice>
-                      <span className="block text-xs text-muted-foreground">Frontend document directory</span>
-                      <span className="mt-0.5 block break-all font-mono text-sm text-foreground">
-                        {selectedFrontend.documentRoot}
-                      </span>
+                {uploadMode === UPLOAD_MODES.FRONTEND_HOTFIX && (
+                  <div className="space-y-5">
+                    <FormItem className="max-w-xl" data-tour="upload-frontend-profile">
+                      <FormLabel>Frontend XAMPP profile</FormLabel>
+                      <SearchableProfileSelect<FrontendProfileActivityModel>
+                        profiles={selectableFrontendProfiles}
+                        value={frontendQuery}
+                        onValueChange={(value) => {
+                          setFrontendQuery(value);
+                          setFrontendProfileUuid('');
+                        }}
+                        onSelect={(profile) => {
+                          setFrontendProfileUuid(profile.profileUuid);
+                          setFrontendQuery(profile.profileName);
+                          setFrontendSelectionStale(false);
+                        }}
+                        getKey={(profile) => profile.profileUuid}
+                        getLabel={(profile) => profile.profileName}
+                        getDescription={(profile) =>
+                          [
+                            `Port ${profile.port}`,
+                            profile.health,
+                            profile.running === true ? 'Running' : profile.running === false ? 'Stopped' : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                        }
+                        getSearchText={(profile) => `${profile.profileName} ${profile.port} ${profile.frontendUrl || ''}`}
+                        isDisabled={(profile) => profile.directoryExists === false}
+                        getDisabledReason={(profile) =>
+                          profile.directoryExists === false ? 'Document root directory is unavailable.' : ''
+                        }
+                        ariaLabel="Select frontend XAMPP profile"
+                        inputAriaLabel="Frontend profile name, port, or URL"
+                        disabled={pending || tutorialActive}
+                      />
+                      {selectedFrontend?.documentRoot && (
+                        <FormDescription>
+                          Document root: <span className="font-mono text-foreground">{selectedFrontend.documentRoot}</span>
+                        </FormDescription>
+                      )}
+                      {selectedFrontend?.frontendUrl && (
+                        <FormDescription>
+                          URL:{' '}
+                          <a
+                            className="text-primary hover:underline"
+                            href={selectedFrontend.frontendUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {selectedFrontend.frontendUrl}
+                          </a>
+                        </FormDescription>
+                      )}
+                      {selectedFrontend && (
+                        <FormDescription>
+                          Health: <span className="text-foreground">{selectedFrontend.health ?? 'Unknown'}</span> · Apache:{' '}
+                          <span className="text-foreground">
+                            {selectedFrontend.running === true
+                              ? 'Running'
+                              : selectedFrontend.running === false
+                                ? 'Stopped'
+                                : 'Unknown'}
+                          </span>
+                        </FormDescription>
+                      )}
+                      {selectedFrontend?.healthReason && <p className="field-error">{selectedFrontend.healthReason}</p>}
+                    </FormItem>
+                    <Notice tone="warning">
+                      Select <strong>index.html</strong> and its sibling files/directories. Do not select their parent build
+                      directory, or index.html will be installed one level too deep.
                     </Notice>
-                  )}
-                <RestartStatus operation={operation} />
-                <OperationItems
-                  operation={operation}
-                  selectedTargets={selectedTargets}
-                  setSelectedTargets={setSelectedTargets}
-                  onRollback={rollback}
-                  rollbackSource={rollbackSource}
-                  selectionDisabled={pending || running || !!uploadLock}
-                />
-                {preflight && (
-                  <div className="space-y-3">
-                    {list(operation.items).some((item) => item.status === 'MISSING') && (
-                      <Notice tone="warning">
-                        Missing items will be skipped. Executing this hotfix will cause the overall operation to finish as failed.
-                      </Notice>
-                    )}
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        className="gap-2"
-                        disabled={pending || !!uploadLock || !canExecuteWarHotfix(operation, selectedTargets)}
-                        onClick={execute}
+                    <div data-tour="upload-production-build">
+                      <BrowserPanel
+                        title="Production build contents"
+                        description="Select index.html and the build content beside it."
                       >
-                        {pending && <Loader2 className="h-4 w-4 animate-spin" />}Deploy hotfix
-                      </Button>
+                        <FileBrowser
+                          rootKey="techDrive"
+                          showSelectAll
+                          selected={sources}
+                          onSelectionChange={setSources}
+                          disabled={pending || tutorialActive}
+                        />
+                      </BrowserPanel>
+                    </div>
+                    {sources.length > 0 && !hasFrontendIndex && (
+                      <p className="field-error">Select the production build&apos;s top-level index.html.</p>
+                    )}
+                  </div>
+                )}
+
+                {uploadMode === UPLOAD_MODES.WILDFLY_HOTFIX && (
+                  <div className="space-y-5">
+                    <FormItem className="max-w-xl" data-tour="upload-wildfly-profile">
+                      <FormLabel>WildFly profile</FormLabel>
+                      <SearchableProfileSelect<RuntimeActivityModel>
+                        profiles={selectableWildflyProfiles}
+                        value={wildflyQuery}
+                        onValueChange={(value) => {
+                          setWildflyQuery(value);
+                          if (!value) setWildflyProfileId('');
+                        }}
+                        onSelect={(profile) => {
+                          setWildflyProfileId(profile.id);
+                          setWildflyQuery(profile.profileName || profile.id);
+                        }}
+                        getLabel={(profile) => profile.profileName || profile.id}
+                        getDescription={(profile) =>
+                          [profile.application, profile.version, profile.status, profile.health].filter(Boolean).join(' · ')
+                        }
+                        getSearchText={(profile) =>
+                          `${profile.profileName || ''} ${profile.id} ${profile.application || ''} ${profile.version || ''}`
+                        }
+                        ariaLabel="Select WildFly profile"
+                        inputAriaLabel="WildFly profile name, application, version, or ID"
+                        disabled={pending || tutorialActive}
+                      />
+                    </FormItem>
+                    <div data-tour="upload-hotfix-sources">
+                      <BrowserPanel
+                        title="Hotfix files and directories"
+                        description="Select one or more items from your Tech Drive."
+                      >
+                        <FileBrowser
+                          rootKey="techDrive"
+                          showSelectAll
+                          selected={sources}
+                          onSelectionChange={setSources}
+                          disabled={pending || tutorialActive}
+                        />
+                      </BrowserPanel>
                     </div>
                   </div>
                 )}
-                {terminal && (
-                  <div className="flex justify-end">
-                    <Button type="button" variant="outline" onClick={() => resetWorkflow()}>
-                      Start another upload
-                    </Button>
-                  </div>
-                )}
+
+                {tutorialActive && tutorialStep === 6 && <TutorialDuplicateResolution />}
+                <div className="flex flex-wrap items-center justify-between gap-3" data-tour="upload-inspect-hotfix">
+                  <p className="text-xs text-muted-foreground">Selected source items: {sources.length}</p>
+                  <Button type="button" className="gap-2" disabled={!createEnabled || pending || tutorialActive} onClick={create}>
+                    {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {uploadMode === UPLOAD_MODES.WILDFLY_HOTFIX
+                      ? pending
+                        ? 'Inspecting…'
+                        : 'Inspect hotfix'
+                      : pending
+                        ? 'Submitting…'
+                        : 'Upload'}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
-          </div>
-        )}
+          )}
+        </div>
+
+        <div data-tour="upload-results">
+          {operation && (
+            <div className="grid gap-5 lg:grid-cols-2" data-testid="upload-results-layout">
+              <Card>
+                <CardContent className="space-y-4 pt-6">
+                  <div>
+                    <h2 className="font-semibold">Selected upload</h2>
+                    <p className="text-xs text-muted-foreground">Operation {operationId}</p>
+                  </div>
+                  <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-2 text-sm">
+                    <dt className="text-muted-foreground">Mode</dt>
+                    <dd>{operation.mode}</dd>
+                    <dt className="text-muted-foreground">Target</dt>
+                    <dd className="break-all">{targetSummary || 'Resolved by the backend'}</dd>
+                  </dl>
+                  <div>
+                    <p className="mb-2 text-sm font-medium">Sources</p>
+                    <ul className="space-y-1">
+                      {(sources.length ? sources : list(operation.items).map((item) => item.sourcePath)).map((path) => (
+                        <li key={path} className="break-all rounded border border-border px-2 py-1.5 font-mono text-xs">
+                          {path}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="space-y-4 pt-6">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="font-semibold">
+                      Operation progress<span className="sr-only">: {operation.status}</span>
+                    </h2>
+                    {(pending || refreshing) && (
+                      <Loader2 aria-label="Refreshing upload" className="h-4 w-4 animate-spin text-primary" />
+                    )}
+                  </div>
+                  {operation.status === 'FAILED' && operation.message && <Notice tone="error">{operation.message}</Notice>}
+                  {operation.mode === UPLOAD_MODES.FRONTEND_HOTFIX &&
+                    operation.status === 'COMPLETED' &&
+                    selectedFrontend?.documentRoot && (
+                      <Notice>
+                        <span className="block text-xs text-muted-foreground">Frontend document directory</span>
+                        <span className="mt-0.5 block break-all font-mono text-sm text-foreground">
+                          {selectedFrontend.documentRoot}
+                        </span>
+                      </Notice>
+                    )}
+                  <RestartStatus operation={operation} />
+                  <OperationItems
+                    operation={operation}
+                    selectedTargets={selectedTargets}
+                    setSelectedTargets={setSelectedTargets}
+                    onRollback={rollback}
+                    rollbackSource={rollbackSource}
+                    selectionDisabled={pending || running || !!uploadLock}
+                  />
+                  {preflight && (
+                    <div className="space-y-3">
+                      {list(operation.items).some((item) => item.status === 'MISSING') && (
+                        <Notice tone="warning">
+                          Missing items will be skipped. Executing this hotfix will cause the overall operation to finish as
+                          failed.
+                        </Notice>
+                      )}
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          className="gap-2"
+                          disabled={pending || !!uploadLock || !canExecuteWarHotfix(operation, selectedTargets)}
+                          onClick={execute}
+                        >
+                          {pending && <Loader2 className="h-4 w-4 animate-spin" />}Deploy hotfix
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {terminal && (
+                    <div className="flex justify-end">
+                      <Button type="button" variant="outline" onClick={() => resetWorkflow()}>
+                        Start another upload
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </div>
       </div>
     </Page>
   );
@@ -736,6 +888,35 @@ function BrowserPanel({ title, description, children }: { title: string; descrip
         <p className="text-xs text-muted-foreground">{description}</p>
       </div>
       {children}
+    </div>
+  );
+}
+
+function TutorialDuplicateResolution() {
+  return (
+    <div
+      className="space-y-3 rounded-md border border-dashed border-orange-500/60 bg-orange-50/40 p-3"
+      data-tour="upload-duplicate-resolution"
+    >
+      <div>
+        <p className="text-sm font-medium">Duplicate file resolution</p>
+        <p className="text-xs text-muted-foreground">Tutorial example only — no files will be inspected or changed.</p>
+      </div>
+      <div className="space-y-1.5">
+        <FormLabel htmlFor="tutorial-duplicate-target">Select target for application.properties</FormLabel>
+        <select
+          id="tutorial-duplicate-target"
+          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+          defaultValue=""
+          disabled
+        >
+          <option value="" disabled>
+            Choose the exact target path
+          </option>
+          <option value="WEB-INF/classes/application.properties">WEB-INF/classes/application.properties</option>
+          <option value="WEB-INF/classes/config/application.properties">WEB-INF/classes/config/application.properties</option>
+        </select>
+      </div>
     </div>
   );
 }

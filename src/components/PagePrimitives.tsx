@@ -1,12 +1,25 @@
 import { AlertCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-export function Page({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+export function Page({
+  title,
+  description,
+  headerAction,
+  children,
+}: {
+  title: string;
+  description?: string;
+  headerAction?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div className="p-5 md:p-8 max-w-8xl mx-auto">
-      <div className="mb-7">
-        <h1 className="text-2xl font-bold">{title}</h1>
-        <p className="text-sm text-muted-foreground mt-1">{description}</p>
+      <div className="mb-7 flex flex-wrap items-start justify-between gap-3" data-tour="page-header">
+        <div>
+          <h1 className="text-2xl font-bold">{title}</h1>
+          {description && <p className="text-sm text-muted-foreground mt-1">{description}</p>}
+        </div>
+        {headerAction && <div className="shrink-0">{headerAction}</div>}
       </div>
       {children}
     </div>
@@ -28,23 +41,33 @@ export function Choice({
   onChange,
   yes,
   no,
+  yesDataTour,
+  noDataTour,
+  disabled = false,
 }: {
   label: string;
   value: boolean;
   onChange: (value: boolean) => void;
   yes: ReactNode;
   no: ReactNode;
+  yesDataTour?: string;
+  noDataTour?: string;
+  disabled?: boolean;
 }) {
   const choices: Array<[boolean, ReactNode]> = [
     [true, yes],
     [false, no],
   ];
   return (
-    <fieldset>
+    <fieldset disabled={disabled}>
       <legend className="text-sm font-medium mb-2">{label}</legend>
       <div className="grid sm:grid-cols-2 gap-2">
         {choices.map(([option, text]) => (
-          <label key={String(option)} className={`choice ${value === option ? 'choice-active' : ''}`}>
+          <label
+            key={String(option)}
+            className={`choice ${value === option ? 'choice-active' : ''}`}
+            data-tour={option ? yesDataTour : noDataTour}
+          >
             <input type="radio" checked={value === option} onChange={() => onChange(option)} />
             {text}
           </label>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyFrontendAssociationUpdate,
   buildActivityMapsFromSnapshot,
   isFrontendWarningEvent,
   jarResourceKeyForReconciliation,
@@ -11,7 +12,7 @@ import {
   reconcileViewingOperationWithSnapshot,
 } from './PortalContext';
 import { frontendProfileActivity, jarProfileActivity, systemEvent, wildflyProfileActivity } from '../test/factories';
-import type { SystemSnapshot } from '@/types/api-contracts';
+import type { SystemEvent, SystemSnapshot } from '@/types/api-contracts';
 import type { OperationRecord } from '@/types/frontend';
 
 const profile = wildflyProfileActivity({
@@ -242,12 +243,63 @@ describe('frontend profile system events', () => {
     });
   });
 
+  it('parses and idempotently applies a frontend association update by frontend UUID and JAR ID', () => {
+    const frontend = frontendProfileActivity({ profileUuid: 'frontend-2', profileName: 'payments-ui', jarProfileUuid: 'jar-2' });
+    const nestedFrontend = frontendProfileActivity({ ...frontend, profileName: 'nested-payments-ui' });
+    const jar = jarProfileActivity({ id: 'jar-2', applicationName: 'payments', frontendProfileUuid: 'frontend-2', frontendProfile: nestedFrontend });
+    const event = parseSseEvent({
+      id: '',
+      event: 'FRONTEND_ASSOCIATION_UPDATED',
+      data: JSON.stringify(
+        systemEvent({
+          eventType: 'FRONTEND_ASSOCIATION_UPDATED',
+          deploymentId: 'deployment-2',
+          resources: {
+            deploymentId: 'deployment-2',
+            jarProfileUuid: 'jar-2',
+            frontendProfileUuid: 'frontend-2',
+            frontendProfile: frontend,
+            jarProfile: jar,
+          },
+        }),
+      ),
+    });
+    expect(event).toEqual(expect.objectContaining({ eventType: 'FRONTEND_ASSOCIATION_UPDATED', scope: 'SYSTEM' }));
+    if (!event || !('eventType' in event) || event.eventType !== 'FRONTEND_ASSOCIATION_UPDATED') return;
+    const current = {
+      wildflyProfileActivityMap: {},
+      jarProfileActivityMap: { unrelated: jarProfileActivity({ id: 'unrelated' }) },
+      frontendProfileActivityMap: { 'frontend-1': frontendProfileActivity({ profileUuid: 'frontend-1' }) },
+    };
+    const applied = applyFrontendAssociationUpdate(current, event);
+    expect(applied.frontendProfileActivityMap).toEqual({ 'frontend-1': expect.anything(), 'frontend-2': frontend });
+    expect(applied.jarProfileActivityMap).toMatchObject({ unrelated: { id: 'unrelated' }, 'jar-2': { id: 'jar-2' } });
+    expect(applied.jarProfileActivityMap['jar-2'].frontendProfile).toBe(event.resources.jarProfile.frontendProfile);
+    expect(applyFrontendAssociationUpdate(applied, event)).toBe(applied);
+  });
+
+  it('rejects malformed frontend association updates', () => {
+    const event = systemEvent<Extract<SystemEvent, { eventType: 'FRONTEND_ASSOCIATION_UPDATED' }>>({
+      eventType: 'FRONTEND_ASSOCIATION_UPDATED',
+      resources: {
+        deploymentId: 'deployment-2',
+        jarProfileUuid: 'jar-2',
+        frontendProfileUuid: 'frontend-2',
+        frontendProfile: frontendProfileActivity(),
+        jarProfile: jarProfileActivity(),
+      },
+    });
+    const malformed = { ...event, resources: { ...event.resources, frontendProfile: { profileUuid: 'frontend-2' } } };
+    expect(parseSseEvent({ id: '', event: 'FRONTEND_ASSOCIATION_UPDATED', data: JSON.stringify(malformed) })).toBeNull();
+  });
+
   it('accepts a backend SYSTEM_SNAPSHOT without backup fields and caches frontend profiles', () => {
     const event = parseSseEvent({
       id: '',
       event: 'SYSTEM_SNAPSHOT',
       data: JSON.stringify({
         eventType: 'SYSTEM_SNAPSHOT',
+        scope: 'SYSTEM',
         timestamp: '2026-08-12T10:00:00Z',
         deploymentId: null,
         resourceKey: null,
@@ -296,6 +348,44 @@ describe('frontend profile system events', () => {
     expect(buildActivityMapsFromSnapshot(event.resources).frontendProfileActivityMap).toEqual({
       'frontend-1': expect.objectContaining({ profileUuid: 'frontend-1', profileName: 'orders-ui', port: 3000 }),
     });
+  });
+
+  it('requires a valid SSE scope and accepts reconciliation SYSTEM events', () => {
+    const event = (scope: string | undefined, eventType: string, resources: unknown) =>
+      parseSseEvent({
+        id: '',
+        event: eventType,
+        data: JSON.stringify({
+          timestamp: '2026-08-12T10:00:00Z',
+          ...(scope === undefined ? {} : { scope }),
+          eventType,
+          deploymentId: null,
+          resourceKey: null,
+          resourceType: null,
+          state: null,
+          pid: null,
+          activeOperationId: null,
+          deployCount: null,
+          consecutiveFailures: null,
+          failedDeployCount: null,
+          lastResult: null,
+          username: null,
+          message: 'Runtime reconciliation found issues.',
+          application: null,
+          readiness: null,
+          readinessReason: null,
+          resources,
+        }),
+      });
+
+    expect(event(undefined, 'RUNTIME_RECONCILIATION_ISSUES', [])).toBeNull();
+    expect(event('INVALID', 'RUNTIME_RECONCILIATION_ISSUES', [])).toBeNull();
+    expect(event('SYSTEM', 'RUNTIME_RECONCILIATION_ISSUES', [])).toEqual(
+      expect.objectContaining({ eventType: 'RUNTIME_RECONCILIATION_ISSUES', scope: 'SYSTEM' }),
+    );
+    expect(event('SYSTEM', 'RUNTIME_RECONCILIATION_RECOVERED', null)).toEqual(
+      expect.objectContaining({ eventType: 'RUNTIME_RECONCILIATION_RECOVERED', scope: 'SYSTEM' }),
+    );
   });
 
   it('clears frontend profiles when SYSTEM_SNAPSHOT includes an explicit empty frontendProfiles array', () => {

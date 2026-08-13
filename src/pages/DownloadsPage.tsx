@@ -7,7 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Notice, Page } from '@/components/PagePrimitives';
 import LockNotice from '@/components/LockNotice';
+import PageTutorial from '@/components/PageTutorial';
 import type { FileRoot } from '@/types/api-contracts';
+import { downloadsTutorialSteps } from '@/lib/pageTutorials';
 
 export default function DownloadsPage() {
   const { lastSystemEvent, findConflictingLock } = usePortal();
@@ -57,6 +59,7 @@ export default function DownloadsPage() {
     <Page
       title="Download files"
       description="Browse within the QC filesystem root and download files or streamed ZIP selections."
+      headerAction={<PageTutorial steps={downloadsTutorialSteps} />}
     >
       <Card>
         <CardHeader>
@@ -94,25 +97,27 @@ export default function DownloadsPage() {
           )}
           {Boolean(error) && !lockError && <Notice tone="error">{errorText}</Notice>}
           <LockNotice lock={downloadLock} />
-          <FileBrowser
-            rootKey="qc"
-            showSelectAll
-            selected={selected}
-            onSelectionChange={(items, change) => {
-              setSelected(items);
-              setSelectionTypes((current) => {
-                const next = { ...current };
-                const changes = 'changes' in change ? change.changes : [change];
-                changes.forEach((item) => {
-                  if (item.selected && item.entry) next[item.relative] = item.entry.type;
-                  else delete next[item.relative];
+          <div data-tour="download-browser">
+            <FileBrowser
+              rootKey="qc"
+              showSelectAll
+              selected={selected}
+              onSelectionChange={(items, change) => {
+                setSelected(items);
+                setSelectionTypes((current) => {
+                  const next = { ...current };
+                  const changes = 'changes' in change ? change.changes : [change];
+                  changes.forEach((item) => {
+                    if (item.selected && item.entry) next[item.relative] = item.entry.type;
+                    else delete next[item.relative];
+                  });
+                  return next;
                 });
-                return next;
-              });
-            }}
-            refreshToken={refreshToken}
-          />
-          <div className="flex flex-wrap items-center justify-between gap-3">
+              }}
+              refreshToken={refreshToken}
+            />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3" data-tour="download-action">
             <p className="text-sm text-muted-foreground">
               {selected.length
                 ? `${selected.length} item(s) selected. Multiple items are returned as qc-download.zip.`

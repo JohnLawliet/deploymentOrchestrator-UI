@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Rocket } from 'lucide-react';
 import FileBrowser from '@/components/FileBrowser';
 import LockNotice from '@/components/LockNotice';
+import PageTutorial from '@/components/PageTutorial';
 import {
   cancelWarPreflight,
   deployWar,
@@ -24,6 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Notice, Page } from '@/components/PagePrimitives';
 import type { AsyncState } from '@/types/frontend';
 import { errorMessage } from '@/types/frontend';
+import { warTutorialSteps } from '@/lib/pageTutorials';
 import type { RootKey, SystemEvent, WarDeploymentRequest, WildFlyDatasource } from '@/types/api-contracts';
 
 const normalizeDatasource = (value: WildFlyDatasource | null | undefined): WildFlyDatasource | null =>
@@ -312,9 +314,13 @@ export default function WarDeploymentPage() {
   };
 
   return (
-    <Page title="Deploy WAR" description="Reserve a WildFly profile, validate an existing Tech Drive WAR, and deploy it.">
+    <Page
+      title="Deploy WAR"
+      description="Reserve a WildFly profile, validate an existing Tech Drive WAR, and deploy it."
+      headerAction={<PageTutorial steps={warTutorialSteps} />}
+    >
       <form onSubmit={submit} className="grid xl:grid-cols-[1.05fr_.95fr] gap-5 items-start">
-        <Card>
+        <Card data-tour="war-target">
           <CardHeader>
             <CardTitle>Source and target</CardTitle>
             <CardDescription>
@@ -389,7 +395,7 @@ export default function WarDeploymentPage() {
               value={datasource}
               onChange={(value) => invalidateAnd(store.setDatasource, value)}
             />
-            <div>
+            <div data-tour="war-source">
               <p className="text-sm font-medium mb-2">WAR from Tech Drive</p>
               <FileBrowser
                 rootKey="techDrive"
@@ -425,7 +431,7 @@ export default function WarDeploymentPage() {
             </Label>
           </CardContent>
         </Card>
-        <Card className="xl:sticky xl:top-5">
+        <Card className="xl:sticky xl:top-5" data-tour="war-preflight">
           <CardHeader>
             <CardTitle>Preflight and deployment</CardTitle>
             <CardDescription>The profile is exclusively reserved until the server-provided expiry time.</CardDescription>
@@ -528,7 +534,7 @@ export default function WarDeploymentPage() {
             ))}
             {cancellationWarning && <Notice tone="warning">{cancellationWarning}</Notice>}
             {error && <Notice tone="error">{error}</Notice>}
-            <Button type="submit" disabled={!canDeploy} className="w-full gap-2">
+            <Button type="submit" disabled={!canDeploy} className="w-full gap-2" data-tour="war-deploy">
               {submitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : canDeploy ? (

@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OperationMap, OperationRecord, RuntimeActivityModel } from '@/types/frontend';
@@ -16,7 +16,24 @@ type DashboardContext = {
   lastSystemEvent: null;
   findConflictingLock: ReturnType<typeof vi.fn>;
 };
-type RollbackProps = { disabled?: boolean; profileId?: string; profileName?: string };
+type RollbackProps = {
+  disabled?: boolean;
+  profileId?: string;
+  profileName?: string;
+  open?: boolean;
+  tourTarget?: string;
+};
+type TutorialProps = {
+  steps: Array<{
+    title: string;
+    instruction: string;
+    why?: string;
+    media?: React.ReactNode;
+    before?: (data: never) => Promise<void>;
+  }>;
+  onStart?: () => void;
+  onReset?: () => void;
+};
 
 const api = vi.hoisted(() => ({
   getJars: vi.fn(),
@@ -33,6 +50,7 @@ const context = vi.hoisted((): { value: DashboardContext | null } => ({
 }));
 const rollback = vi.hoisted((): { props: RollbackProps | null } => ({ props: null }));
 const jarRollback = vi.hoisted((): { props: RollbackProps | null } => ({ props: null }));
+const tutorial = vi.hoisted((): { props: TutorialProps | null; open: boolean } => ({ props: null, open: false }));
 
 vi.mock('@/lib/contractApi', () => api);
 vi.mock('@/context/PortalContext', () => ({
@@ -42,9 +60,12 @@ vi.mock('@/components/RollbackButton', () => ({
   default: (props: RollbackProps) => {
     rollback.props = props;
     return (
-      <button type="button" disabled={props.disabled}>
-        Rollback to previous version
-      </button>
+      <div data-tour={props.tourTarget}>
+        <button type="button" disabled={props.disabled}>
+          Rollback to previous version
+        </button>
+        {props.open && <div data-tour={`${props.tourTarget}-popover`}>Rollback snapshots</div>}
+      </div>
     );
   },
 }));
@@ -55,6 +76,32 @@ vi.mock('@/components/JarRollbackButton', () => ({
       <button type="button" disabled={props.disabled}>
         Rollback JAR
       </button>
+    );
+  },
+}));
+vi.mock('@/components/PageTutorial', () => ({
+  default: (props: TutorialProps) => {
+    tutorial.props = props;
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => {
+            tutorial.open = true;
+            props.onStart?.();
+          }}
+        >
+          Tutorial
+        </button>
+        {tutorial.open &&
+          props.steps.map((step) => (
+            <section key={step.title}>
+              <p>{step.instruction}</p>
+              {step.why && <p>{step.why}</p>}
+              {step.media}
+            </section>
+          ))}
+      </div>
     );
   },
 }));
@@ -85,6 +132,8 @@ const profile = {
 
 describe('PortalDashboardPage profile contract', () => {
   beforeEach(() => {
+    tutorial.props = null;
+    tutorial.open = false;
     api.getJars.mockResolvedValue({
       domain: 'http://127.0.0.1',
       jars: [],
@@ -152,6 +201,62 @@ describe('PortalDashboardPage profile contract', () => {
 
     await user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(api.stopProfile).toHaveBeenCalledWith('opaque/profile:42');
+  });
+
+  it('automatically filters, selects, expands, opens rollback read-only, and restores the dashboard view', async () => {
+    api.getProfiles.mockResolvedValue([{ ...profile, status: 'INACTIVE', serverLogAvailable: false }]);
+    const user = userEvent.setup();
+    render(<PortalDashboardPage />);
+
+    await screen.findByText('payments-qc');
+    const details = screen.getByText('PID').closest('[id]');
+    expect(details).toHaveAttribute('hidden');
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial' }));
+    await waitFor(() => expect(tutorial.props?.steps).toHaveLength(7));
+    expect(screen.getByText(/immediate profile directories beneath configured WildFly roots/i)).toBeVisible();
+
+    const filterStep = tutorial.props!.steps[1].before?.({} as never);
+    await waitFor(() =>
+      expect(document.querySelector<HTMLInputElement>('[data-tour="dashboard-tutorial-search-input"]')).toHaveValue(
+        'payments-qc',
+      ),
+    );
+    await filterStep;
+
+    const expandStep = tutorial.props!.steps[2].before?.({} as never);
+    await waitFor(() => expect(details).not.toHaveAttribute('hidden'));
+    await expandStep;
+    expect(screen.getByText(/ACTIVE requires a PID plus reachable application and management ports/i)).toBeVisible();
+
+    const rollbackStep = tutorial.props!.steps[5].before?.({} as never);
+    expect(await screen.findByText('Rollback snapshots')).toBeVisible();
+    await rollbackStep;
+    expect(api.startProfile).not.toHaveBeenCalled();
+    expect(api.stopProfile).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tutorial.props!.onReset?.();
+    });
+    await waitFor(() => expect(details).toHaveAttribute('hidden'));
+    expect(document.querySelector('[data-tour="dashboard-tutorial-search-input"]')).not.toBeInTheDocument();
+  });
+
+  it('keeps a truthful fallback and the dummy JAR card when profile inventory is empty', async () => {
+    api.getProfiles.mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<PortalDashboardPage />);
+
+    await screen.findByText('No valid WildFly launchers were discovered.');
+    await user.click(screen.getByRole('button', { name: 'Tutorial' }));
+
+    expect(screen.getByText('No profile is available to demonstrate.')).toBeVisible();
+    const jarStep = tutorial.props!.steps[1].before?.({} as never);
+    expect(await screen.findByText('Example orders service')).toBeVisible();
+    expect(screen.getByText('ASSOCIATED FRONTEND')).toBeVisible();
+    expect(screen.getByText('Tutorial example — no live deployment is selected.')).toBeVisible();
+    await jarStep;
+    expect(screen.getByText(/View output needs a retained attachable terminal/i)).toBeVisible();
   });
 
   it('renders null PID as unavailable and lets later live activity take precedence', async () => {
@@ -333,10 +438,10 @@ describe('PortalDashboardPage profile contract', () => {
     const user = userEvent.setup();
     render(<PortalDashboardPage />);
 
-    expect(await screen.findByText('Showing 1–20 of 21 profiles')).toBeVisible();
+    expect(await screen.findByLabelText('WildFly profile page')).toHaveTextContent('Page 1 of 2');
     expect(screen.queryByText('profile-21')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    expect(screen.getByText('Showing 21–21 of 21 profiles')).toBeVisible();
+    expect(screen.getByLabelText('WildFly profile page')).toHaveTextContent('Page 2 of 2');
     expect(screen.getByText('profile-21')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });

@@ -25,7 +25,7 @@ function App() {
             <Route path="create-uat-build" element={<UatBuildPage />} />
             <Route path="upload" element={<UploadPage />} />
             <Route path="tables" element={<TablesPage />} />
-            <Route path="*" element={<Navigate to="dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>
         </Routes>
       </BrowserRouter>

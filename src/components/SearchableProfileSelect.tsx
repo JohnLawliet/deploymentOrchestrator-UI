@@ -36,6 +36,9 @@ type SearchableProfileSelectProps<T extends SearchableProfile> = {
   align?: 'start' | 'center' | 'end';
   className?: string;
   disabled?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  inputDataTour?: string;
 };
 
 export default function SearchableProfileSelect<T extends SearchableProfile>({
@@ -61,8 +64,12 @@ export default function SearchableProfileSelect<T extends SearchableProfile>({
   align = 'start',
   className = 'w-full justify-between font-normal sm:w-72',
   disabled = false,
+  open: controlledOpen,
+  onOpenChange,
+  inputDataTour,
 }: SearchableProfileSelectProps<T>) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
   const normalizedQuery = value.trim().toLocaleLowerCase();
   const suggestions = useMemo(() => {
     if (!normalizedQuery) return profiles;
@@ -73,8 +80,13 @@ export default function SearchableProfileSelect<T extends SearchableProfile>({
     );
   }, [getSearchText, normalizedQuery, profiles]);
 
+  const changeOpen = (nextOpen: boolean) => {
+    if (controlledOpen === undefined) setUncontrolledOpen(nextOpen);
+    onOpenChange?.(nextOpen);
+  };
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -92,6 +104,7 @@ export default function SearchableProfileSelect<T extends SearchableProfile>({
         <Command shouldFilter={false}>
           <CommandInput
             aria-label={inputAriaLabel}
+            data-tour={inputDataTour}
             placeholder={inputPlaceholder}
             value={value}
             onValueChange={onValueChange}
@@ -108,7 +121,7 @@ export default function SearchableProfileSelect<T extends SearchableProfile>({
                     onSelect={() => {
                       if (!createOptionDisabled) {
                         onCreate?.(value.trim());
-                        setOpen(false);
+                        changeOpen(false);
                       }
                     }}
                   >
@@ -125,7 +138,7 @@ export default function SearchableProfileSelect<T extends SearchableProfile>({
                     value="clear-profile-search"
                     onSelect={() => {
                       onValueChange?.('');
-                      setOpen(false);
+                      changeOpen(false);
                     }}
                   >
                     <X className="mr-2 h-4 w-4" />
@@ -149,7 +162,7 @@ export default function SearchableProfileSelect<T extends SearchableProfile>({
                     onSelect={() => {
                       if (!disabled) {
                         onSelect?.(profile);
-                        setOpen(false);
+                        changeOpen(false);
                       }
                     }}
                   >

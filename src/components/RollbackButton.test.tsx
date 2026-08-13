@@ -44,6 +44,16 @@ describe('RollbackButton', () => {
     expect(api.getWarSnapshots).toHaveBeenCalledWith('profile-1');
   });
 
+  it('can open in controlled tutorial mode to inspect snapshots without selecting a rollback', async () => {
+    api.getWarSnapshots.mockResolvedValue([{ snapshotId: 42, createdAt: '2026-08-12T10:00:00Z' }]);
+    render(<RollbackButton profileId="profile-1" profileName="coinDCX" open tourTarget="dashboard-tutorial-rollback" />);
+
+    expect(await screen.findByRole('button', { name: /42/ })).toBeVisible();
+    expect(api.getWarSnapshots).toHaveBeenCalledWith('profile-1');
+    expect(api.rollbackWar).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Rollback to previous version/i })).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('lists snapshots and starts rollback from the selected entry', async () => {
     api.getWarSnapshots.mockResolvedValue([{ snapshotId: 42, createdAt: '2026-08-12T10:00:00Z' }]);
     api.rollbackWar.mockResolvedValue({ operationId: 'rollback-operation', status: 'STARTING' });

@@ -168,6 +168,21 @@ export const operationRecord = (overrides: Partial<OperationRecord> = {}): Opera
 
 export const systemEvent = <T extends SystemEvent>(overrides: Partial<T> & Pick<T, 'eventType' | 'resources'>): T =>
   ({
+    scope:
+      overrides.eventType === 'SYSTEM_SNAPSHOT' ||
+      overrides.eventType === 'FRONTEND_ASSOCIATION_UPDATED' ||
+      overrides.eventType === 'RUNTIME_RECONCILIATION_ISSUES' ||
+      overrides.eventType === 'RUNTIME_RECONCILIATION_RECOVERED'
+        ? 'SYSTEM'
+        : overrides.eventType === 'USER_PRESENCE_CHANGED'
+          ? 'USER'
+          : overrides.eventType === 'OPERATION_PROGRESS' ||
+              overrides.eventType === 'OPERATION_FINISHED' ||
+              overrides.eventType === 'WAR_PREFLIGHT_READY' ||
+              overrides.eventType === 'WAR_PREFLIGHT_CANCELLED' ||
+              overrides.eventType.startsWith('UPLOAD_')
+            ? 'OPERATION'
+            : 'RESOURCE',
     timestamp,
     deploymentId: null,
     resourceKey: null,

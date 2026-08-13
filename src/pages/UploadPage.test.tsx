@@ -15,6 +15,14 @@ type UploadPortal = {
   systemStatus: 'connected';
 };
 
+type PageTutorialProps = {
+  disabled?: boolean;
+  onStart?: () => void;
+  onReset?: () => void;
+  onStepPrepare?: (index: number) => void | Promise<void>;
+  onStepChange?: (index: number) => void;
+};
+
 const api = vi.hoisted(() => ({
   createUpload: vi.fn(),
   executeUpload: vi.fn(),
@@ -65,6 +73,33 @@ vi.mock('@/components/SearchableProfileSelect', () => ({
           Select {getLabel(profile)}
         </button>
       ))}
+    </div>
+  ),
+}));
+vi.mock('@/components/PageTutorial', () => ({
+  default: ({ disabled, onStart, onReset, onStepPrepare }: PageTutorialProps) => (
+    <div>
+      <button type="button" disabled={disabled} onClick={onStart}>
+        Tutorial
+      </button>
+      <button type="button" onClick={() => void onStepPrepare?.(1)}>
+        Tutorial step 1
+      </button>
+      <button type="button" onClick={() => void onStepPrepare?.(2)}>
+        Tutorial step 2
+      </button>
+      <button type="button" onClick={() => void onStepPrepare?.(3)}>
+        Tutorial step 3
+      </button>
+      <button type="button" onClick={() => void onStepPrepare?.(4)}>
+        Tutorial step 4
+      </button>
+      <button type="button" onClick={() => void onStepPrepare?.(6)}>
+        Tutorial step 6
+      </button>
+      <button type="button" onClick={onReset}>
+        Reset tutorial
+      </button>
     </div>
   ),
 }));
@@ -186,6 +221,58 @@ describe('UploadPage', () => {
       await screen.findByText('The selected frontend profile is no longer available. Select another profile.'),
     ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Upload' })).toBeDisabled();
+  });
+
+  it('guides the hotfix flow with local example profiles and restores the prior form when finished', async () => {
+    const user = userEvent.setup();
+    state.portal.frontendProfileActivityMap = {};
+    state.portal.wildflyProfileActivityMap = {};
+    render(<UploadPage />);
+
+    await user.click(screen.getByRole('radio', { name: 'Regular file upload' }));
+    await user.click(screen.getByRole('button', { name: 'Choose techDrive' }));
+    await user.click(screen.getByRole('button', { name: 'Choose qc' }));
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial' }));
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 1' }));
+    expect(document.querySelector('[data-tour="upload-hotfix-type"]')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 2' }));
+    expect(document.querySelector('[data-tour="upload-frontend-profile"]')).toBeInTheDocument();
+    expect(screen.getByText(/C:\\xampp\\htdocs\\example-frontend/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 3' }));
+    expect(document.querySelector('[data-tour="upload-production-build"]')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 4' }));
+    expect(document.querySelector('[data-tour="upload-wildfly-profile"]')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select Example WildFly profile' })).toBeInTheDocument();
+    expect(document.querySelector('[data-tour="upload-hotfix-sources"]')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 6' }));
+    expect(document.querySelector('[data-tour="upload-duplicate-resolution"]')).toBeInTheDocument();
+    expect(screen.getByText('Tutorial example only — no files will be inspected or changed.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Inspect hotfix' })).toBeDisabled();
+    expect(api.createUpload).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Reset tutorial' }));
+    expect(screen.queryByText('Hotfix type')).not.toBeInTheDocument();
+    expect(screen.getByText('Files and directories from Tech Drive')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();
+  });
+
+  it('disables the guided tutorial after an upload operation has been created', async () => {
+    const user = userEvent.setup();
+    render(<UploadPage />);
+
+    await user.click(screen.getByRole('radio', { name: 'Regular file upload' }));
+    await user.click(screen.getByRole('button', { name: 'Choose techDrive' }));
+    await user.click(screen.getByRole('button', { name: 'Choose qc' }));
+    await user.click(screen.getByRole('button', { name: 'Upload' }));
+
+    expect(await screen.findByText('Selected upload')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tutorial' })).toBeDisabled();
   });
 
   it('renders WAR preflight items and executes with sourcePath-keyed duplicate choices', async () => {
