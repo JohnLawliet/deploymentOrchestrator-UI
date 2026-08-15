@@ -102,6 +102,24 @@ type PortalContextValue = ActivityMaps & {
 };
 
 const PortalContext = createContext<PortalContextValue | null>(null);
+
+/**
+ * Progress is private to the initiating user.  Older servers do not always
+ * include a username on progress events, so a locally accepted operation is
+ * the only safe fallback in that case.
+ */
+export function isOwnedOperationEvent(
+  event: Pick<SystemEvent, 'deploymentId' | 'username'>,
+  currentUsername: string,
+  operations: OperationMap,
+  fallbackUsername?: string | null,
+): boolean {
+  const eventUsername = normalizeUsername(event.username || fallbackUsername);
+  if (eventUsername) return eventUsername === normalizeUsername(currentUsername);
+  const deploymentId = String(event.deploymentId || '');
+  return Boolean(deploymentId && operations[deploymentId]?.initiatedByCurrentSession);
+}
+
 const allowedSystemEventTypes: Set<SystemEvent['eventType']> = new Set([
   'SYSTEM_SNAPSHOT',
   'FRONTEND_ASSOCIATION_UPDATED',
@@ -801,6 +819,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const key = `${operationId}:${outcome}`;
           const section = String(details.section || '').toUpperCase();
           const resourceKey = details.resourceKey || event.resourceKey;
+          const ownedOperation = isOwnedOperationEvent(event, username, operationsRef.current, details.username);
           const resourceId = String(resourceKey || '').replace(/^(WILDFLY_PROFILE|JAR|FRONTEND_PROFILE):/, '');
           const frontendHotfix =
             section === 'HOTFIX' &&
@@ -816,7 +835,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           }
           if (operationId && outcome && !completionKeysRef.current.includes(key)) {
             completionKeysRef.current = [...completionKeysRef.current, key].slice(-100);
-            if (normalizeUsername(event.username || details.username) !== normalizeUsername(username)) {
+            if (!ownedOperation) {
               void reconciliation.then((resolvedResource) => {
                 const toast = formatCompletionNotification(event, {
                   activityMaps: mapsRef.current,
@@ -827,7 +846,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
               });
             }
           }
-          if (operationId && outcome) {
+          if (ownedOperation && operationId && outcome) {
             updateOperations((current) =>
               applyOperationFinished(current, operationId, String(outcome), details.summary || event.message),
             );
@@ -837,6 +856,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (event.eventType === 'OPERATION_PROGRESS') {
+          if (!isOwnedOperationEvent(event, username, operationsRef.current)) return;
           updateOperations((current) => reduceOperationProgress(current, event));
           if (event.resources?.status === 'COMPLETED') setLastSystemEvent(event);
           return;
@@ -936,16 +956,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     (operation: Partial<OperationRecord>, resourceKey: string, label: string): OperationRecord => {
       const record: OperationRecord = {
         ...operation,
+        username,
+        initiatedByCurrentSession: true,
         deploymentId: deploymentIdOf(operation),
         resourceKey,
         label,
         registered: true,
       };
-      updateOperations((current) => registerOperationInMap(current, operation, resourceKey, label));
+      updateOperations((current) => registerOperationInMap(current, record, resourceKey, label));
       setViewingOperation(record);
       return record;
     },
-    [updateOperations],
+    [updateOperations, username],
   );
 
   const onlineUsers = useMemo(() => sortOnlineUsers(presenceState.users, username), [presenceState.users, username]);

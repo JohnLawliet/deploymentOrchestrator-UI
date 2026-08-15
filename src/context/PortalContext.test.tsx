@@ -7,6 +7,7 @@ import {
   mapFrontendProfiles,
   mergeActivityMap,
   mergeOperationEventRecord,
+  isOwnedOperationEvent,
   parseSseEvent,
   reconcileOperationsWithSnapshot,
   reconcileViewingOperationWithSnapshot,
@@ -35,6 +36,22 @@ const systemSnapshot = (overrides: Partial<SystemSnapshot> = {}): SystemSnapshot
 const operationRecord = (overrides: Partial<OperationRecord> = {}): OperationRecord => ({
   deploymentId: 'deployment-test',
   ...overrides,
+});
+
+describe('operation event ownership', () => {
+  const event = (deploymentId: string, username: string | null) => ({ deploymentId, username });
+
+  it('accepts current-user progress, rejects another user, and falls back only to a locally accepted operation', () => {
+    const operations = {
+      local: operationRecord({ deploymentId: 'local', initiatedByCurrentSession: true }),
+      remote: operationRecord({ deploymentId: 'remote' }),
+    };
+
+    expect(isOwnedOperationEvent(event('any', 'Alice'), 'alice', operations)).toBe(true);
+    expect(isOwnedOperationEvent(event('local', 'Bob'), 'alice', operations)).toBe(false);
+    expect(isOwnedOperationEvent(event('local', null), 'alice', operations)).toBe(true);
+    expect(isOwnedOperationEvent(event('remote', null), 'alice', operations)).toBe(false);
+  });
 });
 
 describe('lifecycle activity reduction', () => {

@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const listFiles = vi.hoisted(() => vi.fn());
 const deleteFiles = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/contractApi', () => ({ deleteFiles, listFiles }));
+const renameFile = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/contractApi', () => ({ deleteFiles, listFiles, renameFile }));
 
 import FileBrowser from './FileBrowser';
 
@@ -15,6 +16,7 @@ describe('FileBrowser selectableType', () => {
     vi.restoreAllMocks();
     listFiles.mockReset();
     deleteFiles.mockReset();
+    renameFile.mockReset();
   });
 
   it('allows directory selection while keeping files unselectable', async () => {
@@ -84,7 +86,7 @@ describe('FileBrowser selectableType', () => {
     render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} disabled />);
 
     expect(await screen.findByLabelText('Select nested')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'nested' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'nested' })).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('filters current-directory files and folders from the header dropdown', async () => {
@@ -130,6 +132,19 @@ describe('FileBrowser selectableType', () => {
 
     expect(await screen.findByLabelText('Select child.txt')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Filter files and folders' })).toHaveTextContent('Filter files...');
+  });
+
+  it('opens a directory when its non-name area is clicked without starting a rename', async () => {
+    listFiles
+      .mockResolvedValueOnce([{ name: 'nested', type: 'directory' }])
+      .mockResolvedValueOnce([{ name: 'child.txt', type: 'file' }]);
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await screen.findByLabelText('Select nested');
+    await user.click(screen.getByRole('button', { name: 'nested' }));
+
+    expect(await screen.findByLabelText('Select child.txt')).toBeInTheDocument();
   });
 
   it('selects all eligible visible files and directories while preserving earlier selections', async () => {
@@ -264,6 +279,33 @@ describe('FileBrowser selectableType', () => {
     await user.click(await screen.findByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(deleteFiles).toHaveBeenCalledWith('techDrive', ['release']));
+  });
+
+  it('renames an entry when its inline input loses focus and retains its selection', async () => {
+    listFiles.mockResolvedValue([{ name: 'available.xml', type: 'file' }]);
+    let completeRename: () => void = () => undefined;
+    renameFile.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          completeRename = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<StatefulFileBrowser initialSelected={['available.xml']} />);
+
+    await user.click(await screen.findByTitle('Rename'));
+    const input = await screen.findByRole('textbox', { name: 'Rename available.xml' });
+    expect(input).toHaveValue('available');
+    expect(screen.getByText('.xml')).toBeInTheDocument();
+    await user.clear(input);
+    await user.type(input, 'renamed');
+    await user.tab();
+
+    expect(await screen.findByText('...renaming...')).toBeInTheDocument();
+    await waitFor(() => expect(renameFile).toHaveBeenCalledWith({ rootKey: 'techDrive', path: 'available.xml', newName: 'renamed.xml' }));
+    completeRename();
+    expect(await screen.findByTitle('Rename')).toHaveClass('text-blue-600');
+    expect(screen.getByTestId('selected-paths')).toHaveTextContent('renamed.xml');
   });
 });
 

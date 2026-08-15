@@ -21,12 +21,22 @@ import {
   jarDeploymentTimeline,
 } from '@/lib/jarDeploymentProgress';
 import { QC_WAR_TIMELINE, qcWarPhase, qcWarPhaseLabel } from '@/lib/qcWarProgress';
+import {
+  isProfilePowerOperation,
+  profilePowerPhase,
+  profilePowerPhaseLabel,
+  profilePowerTimeline,
+} from '@/lib/profilePowerProgress';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { DeploymentRecord, TerminalOutputEvent } from '@/types/api-contracts';
 import { errorMessage } from '@/types/frontend';
+
+type TimelineStep = { id: string; label: string; description: string };
+type Timeline = { ariaLabel: string; steps: readonly TimelineStep[]; currentStepId?: string; phaseLabel?: string | null };
+type OutputSource = 'none' | 'profile-log' | 'terminal' | 'terminal-pending';
 
 function TimelineStepItem({
   index,
@@ -113,9 +123,11 @@ export default function OperationProgressPanel() {
   const [connection, setConnection] = useState('disconnected');
   const [connectionError, setConnectionError] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
-  const [jarOutputLines, setJarOutputLines] = useState<TerminalOutputEvent[]>([]);
+  const [terminalOutputLines, setTerminalOutputLines] = useState<TerminalOutputEvent[]>([]);
   const outputRef = useRef<HTMLDivElement | null>(null);
   const releasedProfileRef = useRef('');
+  const terminalLineKeysRef = useRef(new Set<string>());
+  const terminalSubscriptionRef = useRef<{ key: string; controller: AbortController } | null>(null);
   const operationId = deploymentIdOf(viewingOperation);
   const live = operationId ? operations[operationId] : null;
   const operationProgress = live?.progress;
@@ -128,24 +140,37 @@ export default function OperationProgressPanel() {
   const rollbackRestored = rollbackOperation && operationProgress?.rollbackState === 'RESTORED';
   const rollbackFailed = rollbackOperation && operationProgress?.rollbackState === 'FAILED';
   const deploymentFailed = operationProgress?.deploymentOutcome === 'FAILED';
-  const lifecycleStatus = live?.statusEvent ? lifecycleStatuses[live.statusEvent as keyof typeof lifecycleStatuses] : undefined;
+  const profilePowerOperation = isProfilePowerOperation(operationType);
+  const lifecycleStatus =
+    profilePowerOperation || !live?.statusEvent ? undefined : lifecycleStatuses[live.statusEvent as keyof typeof lifecycleStatuses];
+  const progressValue =
+    typeof operationProgress?.progressPercentage === 'number' && Number.isFinite(operationProgress.progressPercentage)
+      ? operationProgress.progressPercentage
+      : null;
+  const recordProgress =
+    typeof record?.progressPercentage === 'number' && Number.isFinite(record.progressPercentage)
+      ? record.progressPercentage
+      : null;
+  const recordAdvancesProgress =
+    recordProgress !== null && (progressValue === null || recordProgress > progressValue);
+  const currentRecordStatus = recordAdvancesProgress ? record?.status : undefined;
   const rawStatus =
     lifecycleStatus ||
+    (!profilePowerOperation ? currentRecordStatus : undefined) ||
     operationProgress?.status ||
-    live?.statusEvent ||
-    live?.state ||
-    record?.status ||
-    viewingOperation?.status ||
+    (!profilePowerOperation ? live?.statusEvent : undefined) ||
+    (!profilePowerOperation ? live?.state : undefined) ||
+    (!profilePowerOperation ? record?.status : undefined) ||
+    (!profilePowerOperation ? viewingOperation?.status : undefined) ||
     'STARTING';
   const status = rollbackRestoring ? 'RESTORING' : rollbackRestored ? 'RESTORED' : rollbackFailed ? 'FAILED' : rawStatus;
   const statusTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(rawStatus);
-  const progressValue = operationProgress?.progressPercentage;
-  const recordProgress = record?.progressPercentage;
-  const suppliedProgress = Number.isFinite(progressValue)
-    ? progressValue
-    : Number.isFinite(recordProgress)
-      ? recordProgress
-      : undefined;
+  const suppliedProgress = (() => {
+    const available = [progressValue, profilePowerOperation ? null : recordProgress].filter(
+      (value): value is number => value !== null,
+    );
+    return available.length ? Math.max(...available) : undefined;
+  })();
   const completed = rawStatus === 'COMPLETED' || (manualWarRollback && operationProgress?.deploymentOutcome === 'SUCCEEDED');
   const failed = deploymentFailed || rollbackFailed || rawStatus.includes('FAILED');
   const cancelled = status === 'CANCELLED';
@@ -186,29 +211,60 @@ export default function OperationProgressPanel() {
     operationType !== 'JAR_ROLLBACK' &&
     (operationType === 'JAR_DEPLOY' || isJarDeploymentPhase(operationProgress?.phaseCode));
   const profileId = viewingOperation?.profileId || String(resourceKey).replace(/^WILDFLY_PROFILE:/, '');
-  const profileOutput = resourceType === 'WILDFLY_PROFILE' && viewingOperation?.outputRequested && !!profileId;
-  const jarOutput = resourceType === 'JAR' && viewingOperation?.outputRequested && !!operationId;
+  const outputSource: OutputSource =
+    !viewingOperation?.outputRequested
+      ? 'none'
+      : resourceType === 'WILDFLY_PROFILE'
+        ? !profilePowerOperation && profileId
+            ? 'profile-log'
+            : 'none'
+        : resourceType === 'JAR' && operationId
+          ? live?.terminalAvailabilityConfirmed === true || viewingOperation?.terminalAvailabilityConfirmed === true
+            ? 'terminal'
+            : 'terminal-pending'
+          : 'none';
+  const profileLogOutput = outputSource === 'profile-log';
+  const terminalOutput = outputSource === 'terminal';
+  const hasOutput = outputSource !== 'none';
   const outputLines = useMemo(
-    () => (jarOutput ? jarOutputLines : profileLogLines?.[profileId] || []),
-    [jarOutput, jarOutputLines, profileLogLines, profileId],
+    () => (terminalOutput ? terminalOutputLines : profileLogLines?.[profileId] || []),
+    [terminalOutput, terminalOutputLines, profileLogLines, profileId],
   );
   const showFailedWarLog = warDeployment && deploymentFailed && live?.logAvailable === true;
-  const showJarLog = resourceType === 'JAR' && !jarOutput && live?.logAvailable === true;
+  const showJarLog = resourceType === 'JAR' && !viewingOperation?.outputRequested && live?.logAvailable === true;
   const showSuccessfulWarActions =
     completed && warDeployment && String(resourceKey).startsWith('WILDFLY_PROFILE:') && !!profileId;
   const rollback = rollbackDetails(live?.resources);
   const progressSteps = operationProgress?.steps ?? [];
-  const currentPhase = qcWarPhase(operationProgress?.phaseCode);
-  const currentJarPhase = jarDeploymentPhase(operationProgress?.phaseCode);
-  const jarTimeline = jarDeploymentTimeline(live?.frontendDeploymentRequested ?? viewingOperation?.frontendDeploymentRequested === true);
-  const hasOutput = profileOutput || jarOutput;
+  const timeline: Timeline | null = warDeployment
+    ? {
+        ariaLabel: 'QC WAR deployment timeline',
+        steps: QC_WAR_TIMELINE,
+        currentStepId: qcWarPhase(operationProgress?.phaseCode)?.timelineId,
+        phaseLabel: qcWarPhaseLabel(operationProgress?.phaseCode),
+      }
+    : profilePowerOperation
+      ? {
+          ariaLabel: 'WildFly profile operation timeline',
+          steps: profilePowerTimeline(operationType),
+          currentStepId: profilePowerPhase(operationProgress?.phaseCode)?.timelineId,
+          phaseLabel: profilePowerPhaseLabel(operationProgress?.phaseCode),
+        }
+      : jarDeployment
+        ? {
+            ariaLabel: 'JAR deployment timeline',
+            steps: jarDeploymentTimeline(live?.frontendDeploymentRequested ?? viewingOperation?.frontendDeploymentRequested === true),
+            currentStepId: jarDeploymentPhase(operationProgress?.phaseCode)?.timelineId,
+            phaseLabel: jarDeploymentPhaseLabel(operationProgress?.phaseCode),
+          }
+        : null;
 
   useEffect(() => {
     if (operationId) setExpanded(true);
   }, [operationId]);
 
   useEffect(() => {
-    if (!profileOutput) return undefined;
+    if (!profileLogOutput) return undefined;
     let disposed = false;
     releasedProfileRef.current = '';
     clearProfileLogs(profileId);
@@ -229,50 +285,64 @@ export default function OperationProgressPanel() {
         void unsubscribeProfileLogs(profileId).catch(() => {});
       }
     };
-  }, [profileOutput, profileId, clearProfileLogs]);
+  }, [profileLogOutput, profileId, clearProfileLogs]);
 
   useEffect(() => {
-    if (!jarOutput) return undefined;
+    if (!terminalOutput) return undefined;
+    const terminalUrl = resolvedTerminalEventUrl(live?.terminalEventsUrl || viewingOperation?.terminalEventsUrl, operationId);
+    const subscriptionKey = `${operationId}:${terminalUrl}`;
+    if (terminalSubscriptionRef.current?.key === subscriptionKey) return undefined;
     const controller = new AbortController();
     let disposed = false;
-    setJarOutputLines([]);
+    terminalSubscriptionRef.current = { key: subscriptionKey, controller };
+    terminalLineKeysRef.current.clear();
+    setTerminalOutputLines([]);
     setConnection('connecting');
     setConnectionError('');
-    void fetchEventSource(resolvedTerminalEventUrl(live?.terminalEventsUrl || viewingOperation?.terminalEventsUrl, operationId), {
+    void fetchEventSource(terminalUrl, {
       method: 'GET',
       headers: techDriveHeaders(),
       signal: controller.signal,
       openWhenHidden: true,
       onopen: async (response) => {
-        if (!response.ok) throw new Error(`JAR log stream returned ${response.status}`);
+        if (!response.ok) throw new Error(`Terminal output stream returned ${response.status}`);
         if (!disposed) setConnection('connected');
       },
       onmessage: (message) => {
         const event = isTerminalOutputEvent(message);
         if (!event || event.deploymentId !== operationId) return;
-        setJarOutputLines((current) => [...current, event].slice(-1000));
+        const lineKey = message.id || `${event.timestamp}\u0000${event.replayed ? 'replayed' : 'live'}\u0000${event.line}`;
+        if (terminalLineKeysRef.current.has(lineKey)) return;
+        terminalLineKeysRef.current.add(lineKey);
+        if (terminalLineKeysRef.current.size > 2000) {
+          const oldest = terminalLineKeysRef.current.values().next().value;
+          if (oldest) terminalLineKeysRef.current.delete(oldest);
+        }
+        setTerminalOutputLines((current) => [...current, event].slice(-1000));
       },
       onclose: () => {
+        if (terminalSubscriptionRef.current?.controller === controller) terminalSubscriptionRef.current = null;
         if (!disposed) setConnection('disconnected');
       },
       onerror: (error) => {
         if (!disposed) {
           setConnection('reconnecting');
-          setConnectionError(errorMessage(error, 'Unable to stream JAR output.'));
+          setConnectionError(errorMessage(error, 'Unable to stream terminal output.'));
         }
         return 3000;
       },
     }).catch((error: unknown) => {
       if (!disposed && !controller.signal.aborted) {
         setConnection('disconnected');
-        setConnectionError(errorMessage(error, 'Unable to stream JAR output.'));
+        setConnectionError(errorMessage(error, 'Unable to stream terminal output.'));
       }
     });
     return () => {
       disposed = true;
       controller.abort();
+      if (terminalSubscriptionRef.current?.controller === controller) terminalSubscriptionRef.current = null;
     };
-  }, [jarOutput, live?.terminalEventsUrl, operationId, viewingOperation?.terminalEventsUrl]);
+  }, [terminalOutput, live?.terminalEventsUrl, operationId, viewingOperation?.terminalEventsUrl]);
 
   useEffect(() => {
     if (autoScroll && outputRef.current) {
@@ -283,16 +353,21 @@ export default function OperationProgressPanel() {
   useEffect(() => {
     if (!operationId) return undefined;
     let disposed = false;
+    const refreshRecord = () => {
+      getOperation(operationId)
+        .then((result) => {
+          if (!disposed) setRecord(result);
+        })
+        .catch(() => {});
+    };
     setRecord(null);
     setActionError('');
     setActionMessage('');
-    getOperation(operationId)
-      .then((result) => {
-        if (!disposed) setRecord(result);
-      })
-      .catch(() => {});
+    refreshRecord();
+    const refreshTimer = window.setInterval(refreshRecord, 2000);
     return () => {
       disposed = true;
+      window.clearInterval(refreshTimer);
     };
   }, [operationId]);
 
@@ -326,7 +401,7 @@ export default function OperationProgressPanel() {
 
   const closeDrawer = async () => {
     setActionError('');
-    if (profileOutput) {
+    if (profileLogOutput) {
       setActionState('closing');
       try {
         await unsubscribeProfileLogs(profileId);
@@ -339,7 +414,7 @@ export default function OperationProgressPanel() {
       }
       return;
     }
-    if (resourceType === 'JAR' && operationId) {
+    if (terminalOutput && operationId) {
       setViewingOperation(null);
       return;
     }
@@ -443,7 +518,7 @@ export default function OperationProgressPanel() {
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           {phaseCode && (
             <span>
-              Phase: <strong className="text-foreground">{qcWarPhaseLabel(phaseCode) || jarDeploymentPhaseLabel(phaseCode) || phaseCode}</strong>{' '}
+              Phase: <strong className="text-foreground">{timeline?.phaseLabel || phaseCode}</strong>{' '}
               <span className="font-mono">({phaseCode})</span>
             </span>
           )}
@@ -460,37 +535,19 @@ export default function OperationProgressPanel() {
         {rollbackFailed && operationProgress?.rollbackFailureMessage && (
           <p className="text-sm text-red-700">{operationProgress.rollbackFailureMessage}</p>
         )}
-        {warDeployment && (
+        {timeline && timeline.steps.length > 0 && (
           <TooltipProvider delayDuration={200}>
             <ol
               className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
-              aria-label="QC WAR deployment timeline"
+              aria-label={timeline.ariaLabel}
             >
-              {QC_WAR_TIMELINE.map((step, index) => (
+              {timeline.steps.map((step, index) => (
                 <TimelineStepItem
                   key={step.id}
                   index={index + 1}
                   label={step.label}
                   description={step.description}
-                  current={currentPhase?.timelineId === step.id}
-                />
-              ))}
-            </ol>
-          </TooltipProvider>
-        )}
-        {jarDeployment && (
-          <TooltipProvider delayDuration={200}>
-            <ol
-              className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
-              aria-label="JAR deployment timeline"
-            >
-              {jarTimeline.map((step, index) => (
-                <TimelineStepItem
-                  key={step.id}
-                  index={index + 1}
-                  label={step.label}
-                  description={step.description}
-                  current={currentJarPhase?.timelineId === step.id}
+                  current={timeline.currentStepId === step.id}
                 />
               ))}
             </ol>
@@ -587,7 +644,7 @@ export default function OperationProgressPanel() {
           <div className="mb-2 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2 text-xs font-medium">
               <Terminal className="h-3.5 w-3.5" />
-              {jarOutput ? 'JAR output' : 'Profile output'}
+              {resourceType === 'JAR' ? 'JAR output' : 'Profile output'}
               <span className="font-normal text-muted-foreground">({connection})</span>
             </span>
             <div className="flex flex-wrap gap-1">
@@ -602,7 +659,9 @@ export default function OperationProgressPanel() {
             className="min-h-24 flex-1 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-xs leading-5 text-foreground"
             aria-live="polite"
           >
-            {outputLines.length ? (
+            {outputSource === 'terminal-pending' ? (
+              <span className="text-muted-foreground">Waiting for terminal output to become available…</span>
+            ) : outputLines.length ? (
               outputLines.map((item, index) => (
                 <div
                   className={('replayed' in item ? item.replayed : item.replay) === true ? 'text-muted-foreground' : ''}

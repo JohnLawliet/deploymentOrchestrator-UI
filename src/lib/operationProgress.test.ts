@@ -297,10 +297,10 @@ describe('operation progress canonical correlation', () => {
     ).toBe(registered);
   });
 
-  it('completes a registered WAR profile start when RESOURCE_ACTIVE has no deploymentId', () => {
+  it('does not complete a dashboard profile start when RESOURCE_ACTIVE has no deploymentId', () => {
     const registered = registerOperationInMap(
       {},
-      { deploymentId: 'start-1', resourceType: 'WILDFLY_PROFILE' },
+      { deploymentId: 'start-1', resourceType: 'WILDFLY_PROFILE', operationType: 'PROFILE_START' },
       'WILDFLY_PROFILE:profile-1',
       'Start profile · payments-qc',
     );
@@ -313,35 +313,40 @@ describe('operation progress canonical correlation', () => {
       message: 'Profile is active',
     });
 
-    expect(finished['start-1']?.progress).toMatchObject({
-      phaseCode: 'COMPLETED',
-      status: 'COMPLETED',
-      progressPercentage: 100,
-      deploymentOutcome: 'SUCCEEDED',
-      message: 'Profile is active',
-    });
+    expect(finished).toBe(registered);
   });
 
-  it('completes a registered WAR profile stop when RESOURCE_INACTIVE has no deploymentId', () => {
+  it('does not complete a dashboard profile stop when RESOURCE_INACTIVE has no deploymentId', () => {
     const registered = registerOperationInMap(
       {},
-      { deploymentId: 'stop-1', resourceType: 'WILDFLY_PROFILE' },
+      { deploymentId: 'stop-1', resourceType: 'WILDFLY_PROFILE', operationType: 'PROFILE_STOP' },
       'WILDFLY_PROFILE:profile-1',
       'Stop profile · payments-qc',
     );
 
-    expect(
-      finishRegisteredOperationOnLifecycle(registered, {
-        eventType: 'RESOURCE_INACTIVE',
-        deploymentId: null,
-        resourceKey: 'WILDFLY_PROFILE:profile-1',
-        resourceType: 'WILDFLY_PROFILE',
-        message: 'Profile stopped',
-      })['stop-1']?.progress,
-    ).toMatchObject({
-      status: 'COMPLETED',
-      deploymentOutcome: 'SUCCEEDED',
+    expect(finishRegisteredOperationOnLifecycle(registered, {
+      eventType: 'RESOURCE_INACTIVE',
+      deploymentId: null,
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      resourceType: 'WILDFLY_PROFILE',
       message: 'Profile stopped',
-    });
+    })).toBe(registered);
+  });
+
+  it('does not complete a dashboard profile start from RESOURCE_ACTIVE with the matching deployment ID', () => {
+    const registered = registerOperationInMap(
+      {},
+      { deploymentId: 'start-1', resourceType: 'WILDFLY_PROFILE', operationType: 'PROFILE_START' },
+      'WILDFLY_PROFILE:profile-1',
+      'Start profile · payments-qc',
+    );
+
+    expect(finishRegisteredOperationOnLifecycle(registered, {
+      eventType: 'RESOURCE_ACTIVE',
+      deploymentId: 'start-1',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      resourceType: 'WILDFLY_PROFILE',
+      message: 'WildFly process is active',
+    })).toBe(registered);
   });
 });

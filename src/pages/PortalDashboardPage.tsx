@@ -233,11 +233,25 @@ export default function PortalDashboardPage() {
     setError('');
     try {
       const result = active ? await stopProfile(profile.id) : await startProfile(profile.id);
-      const reconciled = await reconcileResourceActivity(key);
-      const deploymentId = result.deploymentId || reconciled?.activeOperationId;
+      // The accepted response is the terminal-stream capability. Register it
+      // before reconciliation so the owner can consume replayed/live output
+      // immediately rather than waiting for a runtime read.
+      let deploymentId = result.deploymentId || undefined;
+      if (!deploymentId) {
+        const reconciled = await reconcileResourceActivity(key);
+        deploymentId = reconciled?.activeOperationId || undefined;
+      } else {
+        void reconcileResourceActivity(key);
+      }
       if (deploymentId) {
         registerOperation(
-          { deploymentId, resourceType: 'WILDFLY_PROFILE', profileId: profile.id },
+          {
+            deploymentId,
+            resourceType: result.resourceType || 'WILDFLY_PROFILE',
+            profileId: profile.id,
+            applicationName: result.applicationName || activity.applicationName || profile.application || null,
+            operationType: active ? 'PROFILE_STOP' : 'PROFILE_START',
+          },
           key,
           `${verb} profile · ${profile.name}`,
         );

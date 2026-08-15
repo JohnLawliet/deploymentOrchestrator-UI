@@ -22,6 +22,7 @@ import type {
   Profile,
   ProfilePowerResponse,
   RuntimeResource,
+  RenameRequest,
   SnapshotRollbackRequest,
   UatConvertRequest,
   UatOperationResponse,
@@ -336,6 +337,8 @@ export const downloadSelection = (rootKey: FileRoot['key'], paths: string[]): Pr
   blobRequest(client.post<Blob>('/files/download', { rootKey, paths }, { responseType: 'blob' }));
 export const deleteFiles = (rootKey: FileRoot['key'], paths: string[]): Promise<void> =>
   request<void>(client.delete<void>('/files', { data: { rootKey, paths } }), 'Unable to delete the selected items');
+export const renameFile = (payload: RenameRequest): Promise<void> =>
+  request<void>(client.post<void>('/files/rename', payload), 'Unable to rename this file or folder');
 export const preflightUatBuild = (payload: UatPreflightRequest, signal?: AbortSignal): Promise<UatPreflightResponse> =>
   request<UatPreflightResponse>(
     client.post<UatPreflightResponse>('/uat-builds/preflight', payload, { signal }),

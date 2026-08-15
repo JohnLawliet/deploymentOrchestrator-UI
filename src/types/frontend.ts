@@ -121,6 +121,8 @@ export interface OperationRecord {
   applicationName?: string | null;
   label?: string;
   registered?: boolean;
+  /** True only for an operation accepted in this browser session. */
+  initiatedByCurrentSession?: boolean;
   operationType?: string;
   statusEvent?: string;
   outputRequested?: boolean;

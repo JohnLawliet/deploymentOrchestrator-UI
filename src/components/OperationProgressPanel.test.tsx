@@ -169,6 +169,102 @@ describe('OperationProgressPanel revised output contracts', () => {
     expect(options.signal.aborted).toBe(true);
   });
 
+  it('renders dashboard profile progress without opening a terminal stream', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'profile-start-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      profileId: 'profile-1',
+      operationType: 'PROFILE_START',
+      terminalEventsUrl: '/api/terminals/profile-start-1/events',
+      label: 'Start profile · payments-qc',
+    });
+    portal.operations = {
+      'profile-start-1': {
+        deploymentId: 'profile-start-1',
+        resourceType: 'WILDFLY_PROFILE',
+        operationType: 'PROFILE_START',
+        statusEvent: 'RESOURCE_ACTIVE',
+        message: 'WildFly process is active',
+        progress: operationProgressState({
+          phaseCode: 'DEPLOYMENT_MARKER_WAIT',
+          status: 'RESTARTING',
+          progressPercentage: 70,
+          message: 'Waiting for WAR deployment',
+        }),
+      },
+    };
+
+    render(<OperationProgressPanel />);
+
+    expect(stream.options).toBeNull();
+    expect(screen.queryByText('Profile output')).not.toBeInTheDocument();
+    expect(screen.getByText('70%')).toBeInTheDocument();
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+    expect(screen.getByText('Wait for WAR deployment')).toBeInTheDocument();
+    expect(screen.getByLabelText('WildFly profile operation timeline')).toBeInTheDocument();
+  });
+
+  it('does not complete profile progress from RESOURCE_ACTIVE or open terminal output', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'profile-active-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      profileId: 'profile-1',
+      operationType: 'PROFILE_START',
+      terminalEventsUrl: '/api/terminals/profile-active-1/events',
+    });
+    portal.operations = {
+      'profile-active-1': {
+        deploymentId: 'profile-active-1',
+        resourceType: 'WILDFLY_PROFILE',
+        operationType: 'PROFILE_START',
+        statusEvent: 'RESOURCE_ACTIVE',
+        state: 'ACTIVE',
+      },
+    };
+
+    render(<OperationProgressPanel />);
+
+    expect(stream.options).toBeNull();
+    expect(screen.getByText('STARTING')).toBeInTheDocument();
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+  });
+
+  it('waits for JAR terminal availability before opening its terminal stream', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'jar-pending-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:orders',
+      outputRequested: true,
+      terminalEventsUrl: '/api/terminals/jar-pending-1/events',
+    });
+    portal.operations = {
+      'jar-pending-1': {
+        deploymentId: 'jar-pending-1',
+        resourceType: 'JAR',
+        terminalAvailabilityConfirmed: false,
+      },
+    };
+
+    const view = render(<OperationProgressPanel />);
+
+    expect(stream.options).toBeNull();
+    expect(screen.getByText('Waiting for terminal output to become available…')).toBeInTheDocument();
+
+    portal.operations = {
+      'jar-pending-1': {
+        deploymentId: 'jar-pending-1',
+        resourceType: 'JAR',
+        terminalAvailabilityConfirmed: true,
+      },
+    };
+    view.rerender(<OperationProgressPanel />);
+
+    expect(stream.options).not.toBeNull();
+    expect(stream.url).toContain('/api/terminals/jar-pending-1/events');
+  });
+
   it('waits for DEPLOYMENT_LOG_AVAILABLE before showing a completed JAR download', () => {
     portal.viewingOperation = operationRecord({
       deploymentId: 'deployment-1',

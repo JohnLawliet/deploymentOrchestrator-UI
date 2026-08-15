@@ -12,7 +12,7 @@ import {
   Square,
   Trash2,
 } from 'lucide-react';
-import { deleteFiles, listFiles } from '@/lib/contractApi';
+import { deleteFiles, listFiles, renameFile } from '@/lib/contractApi';
 import { Button } from '@/components/ui/button';
 import LockNotice from '@/components/LockNotice';
 import SearchableProfileSelect from '@/components/SearchableProfileSelect';
@@ -55,6 +55,8 @@ export default function FileBrowser({
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renamedPaths, setRenamedPaths] = useState<Set<string>>(() => new Set());
   const [refresh, setRefresh] = useState(0);
   const [fileNameFilter, setFileNameFilter] = useState('');
   const knownEntries = useRef(new Map<string, FileNode>());
@@ -81,6 +83,7 @@ export default function FileBrowser({
   useEffect(() => {
     knownEntries.current.clear();
     setFileNameFilter('');
+    setRenamedPaths(new Set());
   }, [rootKey]);
   useEffect(() => {
     const controller = new AbortController();
@@ -102,8 +105,9 @@ export default function FileBrowser({
     const row = listRef.current?.querySelector(`[data-path="${CSS.escape(firstSelectedRelative)}"]`);
     row?.scrollIntoView({ block: 'nearest' });
   }, [firstSelectedRelative, loading]);
-  const interactionDisabled = disabled || deleting;
+  const interactionDisabled = disabled || deleting || !!renamingPath;
   const supportsDelete = rootKey === 'techDrive' || rootKey === 'qc';
+  const supportsRename = true;
   const deleteLock = supportsDelete ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
   const entryDetails = (entry: FileNode) => {
     const isDirectory = entry.type === 'directory';
@@ -130,6 +134,11 @@ export default function FileBrowser({
     setActionError('');
     setFileNameFilter('');
     setPath(index < 0 ? '.' : crumbs.slice(0, index + 1).join('/'));
+  };
+  const openDirectory = (relative: string) => {
+    setActionError('');
+    setFileNameFilter('');
+    setPath(relative);
   };
   const toggle = (relative: string, entry: FileNode) => {
     const removing = selected.includes(relative);
@@ -179,6 +188,38 @@ export default function FileBrowser({
       setActionError(errorMessage(reason));
     } finally {
       setDeleting(false);
+    }
+  };
+  const renameEntry = async (entry: FileNode, relative: string, newName: string) => {
+    if (renamingPath || interactionDisabled || entry.locked || !supportsRename) return;
+    setRenamingPath(relative);
+    setActionError('');
+    try {
+      await renameFile({ rootKey, path: relative, newName });
+      const renamedRelative = joinRelative(path, newName);
+      const renamedEntry = { ...entry, name: newName };
+      setEntries((current) => sortEntries(current.map((item) => (item.name === entry.name ? renamedEntry : item))));
+      knownEntries.current.delete(relative);
+      knownEntries.current.set(renamedRelative, renamedEntry);
+      setRenamedPaths((current) => {
+        const next = new Set(current);
+        next.delete(relative);
+        next.add(renamedRelative);
+        return next;
+      });
+      if (selected.includes(relative)) {
+        const nextSelected = selected.map((item) => (item === relative ? renamedRelative : item));
+        onSelectionChange?.(nextSelected, {
+          changes: [
+            { relative, entry, selected: false },
+            { relative: renamedRelative, entry: renamedEntry, selected: true },
+          ],
+        });
+      }
+    } catch (reason: unknown) {
+      setActionError(errorMessage(reason));
+    } finally {
+      setRenamingPath(null);
     }
   };
 
@@ -320,25 +361,38 @@ export default function FileBrowser({
                     onChange={() => toggle(relative, entry)}
                   />
                 )}
-                <button
-                  type="button"
-                  disabled={!isDirectory || interactionDisabled}
+                <div
+                  role="button"
+                  tabIndex={isDirectory && !interactionDisabled ? 0 : undefined}
+                  aria-label={entry.name}
+                  aria-disabled={!isDirectory || interactionDisabled}
                   onClick={() => {
-                    if (isDirectory) {
-                      setActionError('');
-                      setFileNameFilter('');
-                      setPath(relative);
+                    if (isDirectory) openDirectory(relative);
+                  }}
+                  onKeyDown={(event) => {
+                    if (isDirectory && !interactionDisabled && (event.key === 'Enter' || event.key === ' ')) {
+                      event.preventDefault();
+                      openDirectory(relative);
                     }
                   }}
-                  className="flex flex-1 min-w-0 items-center gap-3 text-left disabled:cursor-default"
+                  className={`flex min-w-0 flex-1 items-center gap-3 text-left ${
+                    isDirectory && !interactionDisabled ? 'cursor-pointer' : 'cursor-default'
+                  }`}
                 >
                   {isDirectory ? (
                     <Folder className="w-4 h-4 text-amber-600 shrink-0" />
                   ) : (
-                    <File className="w-4 h-4 text-blue-600 shrink-0" />
+                  <File className="w-4 h-4 text-blue-600 shrink-0" />
                   )}
-                  <span className="truncate text-sm">{entry.name}</span>
-                </button>
+                  <InlineRename
+                    name={entry.name}
+                    isDirectory={isDirectory}
+                    canRename={supportsRename && !entry.locked && !interactionDisabled}
+                    isRenaming={renamingPath === relative}
+                    wasRenamed={renamedPaths.has(relative)}
+                    onRename={(newName) => renameEntry(entry, relative, newName)}
+                  />
+                </div>
                 {entry.locked && (
                   <span title={entry.lockMode || 'Locked'}>
                     <Lock className="w-3.5 h-3.5 text-amber-600" />
@@ -356,6 +410,92 @@ export default function FileBrowser({
       </div>
     </div>
   );
+}
+
+type InlineRenameProps = {
+  name: string;
+  isDirectory: boolean;
+  canRename: boolean;
+  isRenaming: boolean;
+  wasRenamed: boolean;
+  onRename: (newName: string) => Promise<void>;
+};
+
+function InlineRename({ name, isDirectory, canRename, isRenaming, wasRenamed, onRename }: InlineRenameProps) {
+  const extension = isDirectory ? '' : fileExtension(name);
+  const baseName = extension ? name.slice(0, -extension.length) : name;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(baseName);
+  const submitting = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(baseName);
+  }, [baseName, editing]);
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const submit = () => {
+    if (submitting.current) return;
+    const newName = draft.trim();
+    setEditing(false);
+    if (`${newName}${extension}` === name) return;
+    if (!newName || newName === '.' || newName === '..' || /[\\/]/.test(newName)) return;
+    submitting.current = true;
+    void onRename(`${newName}${extension}`).finally(() => {
+      submitting.current = false;
+    });
+  };
+
+  if (isRenaming) return <span className="shrink-0 text-sm text-muted-foreground">...renaming...</span>;
+  if (editing) {
+    return (
+      <span className="inline-flex items-center">
+        <input
+          ref={inputRef}
+          type="text"
+          aria-label={`Rename ${name}`}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onClick={(event) => event.stopPropagation()}
+          onBlur={submit}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              setEditing(false);
+            }
+          }}
+          className="max-w-full rounded border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        {extension && <span className="shrink-0 text-sm text-muted-foreground">{extension}</span>}
+      </span>
+    );
+  }
+  return (
+    <span
+      aria-disabled={!canRename}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (canRename) setEditing(true);
+      }}
+      onDoubleClick={(event) => event.stopPropagation()}
+      className={`shrink-0 truncate text-sm ${canRename ? 'cursor-text' : ''} ${wasRenamed ? 'text-blue-600' : ''}`}
+      title={canRename ? 'Rename' : undefined}
+    >
+      {name}
+    </span>
+  );
+}
+
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot) : '';
 }
 
 function formatSize(bytes = 0): string {

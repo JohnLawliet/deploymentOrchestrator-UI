@@ -63,6 +63,7 @@ import {
   rollbackWar,
   preflightUatBuild,
   releaseUatBuildLock,
+  renameFile,
   startProfile,
   stopJar,
   stopProfile,
@@ -332,6 +333,16 @@ describe('executeDatabaseQuery', () => {
 
     expect(client.delete).toHaveBeenCalledWith('/files', {
       data: { rootKey: 'techDrive', paths: ['release/a.txt', 'release/b.txt'] },
+    });
+  });
+
+  it('sends the relative file path and replacement name when renaming an entry', async () => {
+    await renameFile({ rootKey: 'qc', path: 'release/old-name.war', newName: 'new-name.war' });
+
+    expect(client.post).toHaveBeenCalledWith('/files/rename', {
+      rootKey: 'qc',
+      path: 'release/old-name.war',
+      newName: 'new-name.war',
     });
   });
 

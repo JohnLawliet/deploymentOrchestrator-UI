@@ -1,6 +1,7 @@
 import type { DeploymentStatus, OperationProgress, SystemEvent } from '@/types/api-contracts';
 import type { OperationMap, OperationProgressState, OperationRecord, OperationStatus } from '@/types/frontend';
 import { isFailureProgress } from './qcWarProgress';
+import { isProfilePowerOperation } from './profilePowerProgress';
 
 type OperationProgressEvent = Extract<SystemEvent, { eventType: 'OPERATION_PROGRESS' }>;
 type ProgressStep = Omit<OperationProgress, 'status'> & { status: string | null; timestamp: string; message: string | null };
@@ -359,6 +360,10 @@ function isTrackedRuntimeResource(resourceType: string | null | undefined, resou
   );
 }
 
+function isProfilePowerRecord(operation: OperationRecord | undefined): boolean {
+  return operation?.resourceType === 'WILDFLY_PROFILE' && isProfilePowerOperation(operation.operationType);
+}
+
 export function finishRegisteredOperationOnLifecycle(
   operations: OperationMap,
   event: Pick<SystemEvent, 'eventType' | 'deploymentId' | 'resourceKey' | 'resourceType' | 'message'>,
@@ -370,6 +375,7 @@ export function finishRegisteredOperationOnLifecycle(
 
   const deploymentId = deploymentIdOf(event);
   if (deploymentId && operations[deploymentId]) {
+    if (isProfilePowerRecord(operations[deploymentId])) return operations;
     return applyOperationFinished(operations, deploymentId, 'COMPLETED', event.message, now);
   }
 
@@ -377,6 +383,7 @@ export function finishRegisteredOperationOnLifecycle(
     (operation) =>
       operation.registered &&
       !isOperationTerminal(operation) &&
+      !isProfilePowerRecord(operation) &&
       operation.resourceKey === resourceKey &&
       isTrackedRuntimeResource(operation.resourceType, String(operation.resourceKey || '')),
   );

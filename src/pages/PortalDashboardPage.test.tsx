@@ -140,7 +140,13 @@ describe('PortalDashboardPage profile contract', () => {
     });
     api.getProfiles.mockResolvedValue([profile]);
     api.startProfile.mockResolvedValue({});
-    api.stopProfile.mockResolvedValue({});
+    api.stopProfile.mockResolvedValue({
+      deploymentId: 'profile-stop-1',
+      status: 'ACCEPTED',
+      terminalEventsUrl: '/api/terminals/profile-stop-1/events',
+      resourceType: 'WILDFLY_PROFILE',
+      applicationName: 'payments',
+    });
     api.restartJar.mockResolvedValue({ deploymentId: 'restart-1' });
     api.stopJar.mockResolvedValue({ deploymentId: 'stop-1' });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -201,6 +207,24 @@ describe('PortalDashboardPage profile contract', () => {
 
     await user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(api.stopProfile).toHaveBeenCalledWith('opaque/profile:42');
+    await waitFor(() =>
+      expect(context.value!.registerOperation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deploymentId: 'profile-stop-1',
+          resourceType: 'WILDFLY_PROFILE',
+          profileId: 'opaque/profile:42',
+          applicationName: 'payments',
+          operationType: 'PROFILE_STOP',
+        }),
+        'WILDFLY_PROFILE:opaque/profile:42',
+        'Stop profile · payments-qc',
+      ),
+    );
+    const stopOperation = context.value!.registerOperation.mock.calls.find(
+      ([operation]) => operation.operationType === 'PROFILE_STOP',
+    )?.[0];
+    expect(stopOperation).not.toHaveProperty('outputRequested');
+    expect(stopOperation).not.toHaveProperty('terminalEventsUrl');
   });
 
   it('automatically filters, selects, expands, opens rollback read-only, and restores the dashboard view', async () => {
@@ -479,10 +503,20 @@ describe('PortalDashboardPage profile contract', () => {
 
     expect(api.startProfile).toHaveBeenCalledWith('opaque/profile:42');
     expect(context.value!.registerOperation).toHaveBeenCalledWith(
-      { deploymentId: 'start-1', resourceType: 'WILDFLY_PROFILE', profileId: 'opaque/profile:42' },
+      expect.objectContaining({
+        deploymentId: 'start-1',
+        resourceType: 'WILDFLY_PROFILE',
+        profileId: 'opaque/profile:42',
+        operationType: 'PROFILE_START',
+      }),
       'WILDFLY_PROFILE:opaque/profile:42',
       'Start profile · payments-qc',
     );
+    const startOperation = context.value!.registerOperation.mock.calls.find(
+      ([operation]) => operation.operationType === 'PROFILE_START',
+    )?.[0];
+    expect(startOperation).not.toHaveProperty('outputRequested');
+    expect(startOperation).not.toHaveProperty('terminalEventsUrl');
   });
 
   it('registers a profile start from reconciled activity when the start body omits deploymentId', async () => {
@@ -498,7 +532,12 @@ describe('PortalDashboardPage profile contract', () => {
     await user.click(await screen.findByRole('button', { name: 'Start' }));
 
     expect(context.value!.registerOperation).toHaveBeenCalledWith(
-      { deploymentId: 'live-start-1', resourceType: 'WILDFLY_PROFILE', profileId: 'opaque/profile:42' },
+      expect.objectContaining({
+        deploymentId: 'live-start-1',
+        resourceType: 'WILDFLY_PROFILE',
+        profileId: 'opaque/profile:42',
+        operationType: 'PROFILE_START',
+      }),
       'WILDFLY_PROFILE:opaque/profile:42',
       'Start profile · payments-qc',
     );
@@ -513,7 +552,12 @@ describe('PortalDashboardPage profile contract', () => {
 
     expect(api.stopProfile).toHaveBeenCalledWith('opaque/profile:42');
     expect(context.value!.registerOperation).toHaveBeenCalledWith(
-      { deploymentId: 'stop-profile-1', resourceType: 'WILDFLY_PROFILE', profileId: 'opaque/profile:42' },
+      expect.objectContaining({
+        deploymentId: 'stop-profile-1',
+        resourceType: 'WILDFLY_PROFILE',
+        profileId: 'opaque/profile:42',
+        operationType: 'PROFILE_STOP',
+      }),
       'WILDFLY_PROFILE:opaque/profile:42',
       'Stop profile · payments-qc',
     );

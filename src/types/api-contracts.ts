@@ -54,6 +54,11 @@ export interface DownloadRequest {
   paths: string[];
 }
 export type DeleteRequest = DownloadRequest;
+export interface RenameRequest {
+  rootKey: RootKey;
+  path: string;
+  newName: string;
+}
 
 export interface LockInfo {
   resourceKey: string;
@@ -627,6 +632,7 @@ export interface ApiRoutes {
   'GET /api/files/download': { query: { rootKey: RootKey; path: string }; response: Blob };
   'POST /api/files/download': { body: DownloadRequest; response: Blob };
   'DELETE /api/files': { body: DeleteRequest; response: void; status: 204 };
+  'POST /api/files/rename': { body: RenameRequest; response: void };
   'GET /api/logs': { query: { applicationName: string; date?: string }; response: Blob };
   'GET /api/dashboard/war-applications': {
     response: Array<{ application: string; warFileName: string; environments: string[] }>;
