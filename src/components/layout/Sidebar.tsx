@@ -164,7 +164,7 @@ export default function Sidebar() {
             </PopoverTrigger>
             <PopoverContent side="right" align="end" sideOffset={8} className="z-[100] w-40 p-1">
               <Button variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={changeUser}>
-                Change user
+                Log out
               </Button>
             </PopoverContent>
           </Popover>

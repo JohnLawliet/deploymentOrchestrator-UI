@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyOperationFinished,
+  finishRegisteredOperationOnLifecycle,
   parseOperationProgressData,
   reduceOperationProgress,
   registerOperationInMap,
@@ -239,5 +240,108 @@ describe('operation progress canonical correlation', () => {
     });
 
     expect(applyOperationFinished(registered, 'war-1', 'UNKNOWN')).toBe(registered);
+
+    expect(applyOperationFinished(registered, 'war-1', 'ACTIVE', 'Application is active')['war-1']?.progress).toMatchObject({
+      phaseCode: 'COMPLETED',
+      status: 'COMPLETED',
+      progressPercentage: 100,
+      deploymentOutcome: 'SUCCEEDED',
+    });
+    expect(applyOperationFinished(registered, 'war-1', 'SUCCEEDED')['war-1']?.progress?.deploymentOutcome).toBe('SUCCEEDED');
+  });
+
+  it('completes a registered JAR restart when RESOURCE_ACTIVE has no deploymentId', () => {
+    const restartProgress = progressEvent('restart-1');
+    restartProgress.resourceKey = 'JAR:vendor-portal';
+    restartProgress.resourceType = 'JAR';
+    restartProgress.resources = {
+      ...restartProgress.resources,
+      phaseCode: 'RESTARTING',
+      status: 'RESTARTING',
+      progressPercentage: 60,
+    };
+    const registered = registerOperationInMap(
+      reduceOperationProgress({}, restartProgress),
+      { deploymentId: 'restart-1', resourceType: 'JAR' },
+      'JAR:vendor-portal',
+      'Restart JAR · vendorPortal',
+    );
+
+    const finished = finishRegisteredOperationOnLifecycle(registered, {
+      eventType: 'RESOURCE_ACTIVE',
+      deploymentId: null,
+      resourceKey: 'JAR:vendor-portal',
+      resourceType: 'JAR',
+      message: 'Application is active',
+    });
+
+    expect(finished['restart-1']?.progress).toMatchObject({
+      phaseCode: 'COMPLETED',
+      status: 'COMPLETED',
+      progressPercentage: 100,
+      deploymentOutcome: 'SUCCEEDED',
+      message: 'Application is active',
+    });
+  });
+
+  it('does not complete JAR restart on RESOURCE_STARTING', () => {
+    const registered = registerOperationInMap({}, { deploymentId: 'restart-1', resourceType: 'JAR' }, 'JAR:vendor-portal', 'Restart');
+    expect(
+      finishRegisteredOperationOnLifecycle(registered, {
+        eventType: 'RESOURCE_STARTING',
+        deploymentId: 'restart-1',
+        resourceKey: 'JAR:vendor-portal',
+        resourceType: 'JAR',
+        message: 'Starting',
+      }),
+    ).toBe(registered);
+  });
+
+  it('completes a registered WAR profile start when RESOURCE_ACTIVE has no deploymentId', () => {
+    const registered = registerOperationInMap(
+      {},
+      { deploymentId: 'start-1', resourceType: 'WILDFLY_PROFILE' },
+      'WILDFLY_PROFILE:profile-1',
+      'Start profile · payments-qc',
+    );
+
+    const finished = finishRegisteredOperationOnLifecycle(registered, {
+      eventType: 'RESOURCE_ACTIVE',
+      deploymentId: null,
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      resourceType: 'WILDFLY_PROFILE',
+      message: 'Profile is active',
+    });
+
+    expect(finished['start-1']?.progress).toMatchObject({
+      phaseCode: 'COMPLETED',
+      status: 'COMPLETED',
+      progressPercentage: 100,
+      deploymentOutcome: 'SUCCEEDED',
+      message: 'Profile is active',
+    });
+  });
+
+  it('completes a registered WAR profile stop when RESOURCE_INACTIVE has no deploymentId', () => {
+    const registered = registerOperationInMap(
+      {},
+      { deploymentId: 'stop-1', resourceType: 'WILDFLY_PROFILE' },
+      'WILDFLY_PROFILE:profile-1',
+      'Stop profile · payments-qc',
+    );
+
+    expect(
+      finishRegisteredOperationOnLifecycle(registered, {
+        eventType: 'RESOURCE_INACTIVE',
+        deploymentId: null,
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+        resourceType: 'WILDFLY_PROFILE',
+        message: 'Profile stopped',
+      })['stop-1']?.progress,
+    ).toMatchObject({
+      status: 'COMPLETED',
+      deploymentOutcome: 'SUCCEEDED',
+      message: 'Profile stopped',
+    });
   });
 });

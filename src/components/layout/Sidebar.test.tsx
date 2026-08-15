@@ -44,7 +44,7 @@ describe('Sidebar Upload navigation', () => {
     expect(screen.queryByText('LATER')).not.toBeInTheDocument();
   });
 
-  it('opens the user menu from the displayed name and changes user from the menu', async () => {
+  it('opens the user menu from the displayed name and logs out from the menu', async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
@@ -52,9 +52,9 @@ describe('Sidebar Upload navigation', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByRole('button', { name: 'Change user' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'jonty' }));
-    await user.click(screen.getByRole('button', { name: 'Change user' }));
+    await user.click(screen.getByRole('button', { name: 'Log out' }));
 
     expect(portal.changeUser).toHaveBeenCalledOnce();
   });

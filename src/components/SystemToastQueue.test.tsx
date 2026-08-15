@@ -41,4 +41,13 @@ describe('SystemToastQueue', () => {
     vi.advanceTimersByTime(1);
     expect(portal.dismissSystemToast).toHaveBeenCalledWith('warning');
   });
+
+  it('does not auto-dismiss the backend offline toast', () => {
+    vi.useFakeTimers();
+    portal.systemToasts = [{ id: 'offline', variant: 'warning', message: 'The backend is offline.' }];
+    render(<SystemToastQueue />);
+
+    vi.advanceTimersByTime(10000);
+    expect(portal.dismissSystemToast).not.toHaveBeenCalled();
+  });
 });

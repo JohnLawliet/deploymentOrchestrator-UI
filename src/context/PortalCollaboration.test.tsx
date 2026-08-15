@@ -6,6 +6,7 @@ import type { OperationFinished, SystemEvent } from '@/types/api-contracts';
 import { frontendProfileActivity, jarProfileActivity, lockInfo, systemEvent, userPresence } from '../test/factories';
 
 type LockConflictHandler = (error: ApiRequestError) => void;
+type BackendUnavailableHandler = (error: ApiRequestError) => void;
 
 const api = vi.hoisted(() => ({
   getLocks: vi.fn(),
@@ -13,6 +14,7 @@ const api = vi.hoisted(() => ({
   getProfiles: vi.fn(),
   getRuntimeResource: vi.fn(),
   lockConflictHandler: null as LockConflictHandler | null,
+  backendUnavailableHandler: null as BackendUnavailableHandler | null,
   reportUserActivity: vi.fn(),
   validateUser: vi.fn(),
 }));
@@ -20,11 +22,19 @@ const stream = vi.hoisted(() => ({ fetchEventSource: vi.fn<typeof fetchEventSour
 
 vi.mock('@microsoft/fetch-event-source', () => ({ fetchEventSource: stream.fetchEventSource }));
 vi.mock('@/lib/contractApi', () => ({
+  BACKEND_OFFLINE_TOAST: 'The backend is offline.',
   eventUrl: (path: string) => `/deploymentOrchestrator/api${path}`,
   getLocks: api.getLocks,
   getOperation: api.getOperation,
   getProfiles: api.getProfiles,
   getRuntimeResource: api.getRuntimeResource,
+  isBackendUnavailable: (error: { status?: number } | null | undefined) => error?.status === 503,
+  onBackendUnavailable: (handler: BackendUnavailableHandler) => {
+    api.backendUnavailableHandler = handler;
+    return () => {
+      api.backendUnavailableHandler = null;
+    };
+  },
   onLockConflict: (handler: LockConflictHandler) => {
     api.lockConflictHandler = handler;
     return () => {
@@ -47,6 +57,9 @@ function Harness() {
       <span data-testid="toasts">{portal.operationToasts.map((toast) => toast.id).join(',')}</span>
       <span data-testid="system-toasts">{portal.systemToasts.map((toast) => `${toast.variant}:${toast.message}`).join(',')}</span>
       <span data-testid="system-status">{portal.systemStatus}</span>
+      <span data-testid="validated">{String(portal.validated)}</span>
+      <span data-testid="username">{portal.username}</span>
+      <span data-testid="validation-error">{portal.validationError}</span>
       <span data-testid="frontend-profiles">{JSON.stringify(portal.frontendProfileActivityMap)}</span>
       <span data-testid="jar-profiles">{JSON.stringify(portal.jarProfileActivityMap)}</span>
       <button type="button" onClick={portal.reportInteraction}>
@@ -90,7 +103,13 @@ const openStream = async (options: FetchEventSourceInit) => {
 const failStream = (options: FetchEventSourceInit) => {
   const onerror = options.onerror;
   if (!onerror) throw new Error('Expected an event stream error handler.');
-  act(() => onerror(new Error('network')));
+  act(() => {
+    try {
+      onerror(new Error('network'));
+    } catch {
+      /* logout throws to stop SSE retry */
+    }
+  });
 };
 
 const lockConflictError = (): ApiRequestError =>
@@ -123,7 +142,9 @@ describe('PortalProvider collaboration contracts', () => {
     api.reportUserActivity.mockReset();
     api.validateUser.mockReset();
     api.lockConflictHandler = null;
+    api.backendUnavailableHandler = null;
     stream.fetchEventSource.mockReset();
+    vi.useRealTimers();
   });
 
   it('hydrates authoritative snapshots and applies revision-safe presence and lock transitions', async () => {
@@ -283,6 +304,69 @@ describe('PortalProvider collaboration contracts', () => {
     });
   });
 
+  it('surfaces Tech Drive share notices as warning toasts without blocking login', async () => {
+    api.validateUser.mockResolvedValue({
+      valid: true,
+      normalizedUsername: 'johnsmith',
+      notices: ['unable to access techdrive'],
+    });
+
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('true'));
+    expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:unable to access techdrive');
+  });
+
+  it('surfaces Tech Drive directory-created notices as warning toasts', async () => {
+    api.validateUser.mockResolvedValue({
+      valid: true,
+      normalizedUsername: 'johnsmith',
+      notices: ["directory isn't present so the directory with same name has been created"],
+    });
+
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('true'));
+    expect(screen.getByTestId('system-toasts')).toHaveTextContent(
+      "warning:directory isn't present so the directory with same name has been created",
+    );
+  });
+
+  it('does not toast when validate notices are empty or omitted', async () => {
+    api.validateUser.mockResolvedValue({ valid: true, normalizedUsername: 'johnsmith' });
+
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('true'));
+    expect(screen.getByTestId('system-toasts')).toBeEmptyDOMElement();
+  });
+
+  it('keeps login failed and skips notice toasts when validateUser rejects', async () => {
+    api.validateUser.mockRejectedValue(new Error('Unknown user.'));
+
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('false'));
+    expect(screen.getByTestId('validation-error')).toHaveTextContent('Unknown user.');
+    expect(screen.getByTestId('system-toasts')).toBeEmptyDOMElement();
+  });
+
   it('shows live SYSTEM reconciliation alerts without changing resource or operation state', async () => {
     render(
       <PortalProvider>
@@ -348,7 +432,7 @@ describe('PortalProvider collaboration contracts', () => {
     await waitFor(() => expect(api.getLocks).toHaveBeenCalledTimes(2));
   });
 
-  it('ignores heartbeat and malformed messages without changing connection state', async () => {
+  it('logs out after a connected stream drops instead of reconnecting', async () => {
     render(
       <PortalProvider>
         <Harness />
@@ -366,8 +450,46 @@ describe('PortalProvider collaboration contracts', () => {
     expect(screen.getByTestId('system-status')).toHaveTextContent('connected');
 
     failStream(options);
-    expect(screen.getByTestId('system-status')).toHaveTextContent('reconnecting');
-    await openStream(options);
-    expect(screen.getByTestId('system-status')).toHaveTextContent('connected');
+    expect(screen.getByTestId('system-status')).toHaveTextContent('disconnected');
+    expect(screen.getByTestId('validated')).toHaveTextContent('false');
+    expect(screen.getByTestId('username')).toBeEmptyDOMElement();
+    expect(sessionStorage.getItem('qc-deployment-username')).toBeNull();
+    expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:The backend is offline.');
+  });
+
+  it('logs out and toasts when axios reports the backend unavailable', async () => {
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('true'));
+    const handler = api.backendUnavailableHandler;
+    if (!handler) throw new Error('Expected a backend-unavailable handler.');
+    act(() => handler(Object.assign(new Error('offline'), { status: 503, paths: [], users: [], details: null })));
+    expect(screen.getByTestId('validated')).toHaveTextContent('false');
+    expect(sessionStorage.getItem('qc-deployment-username')).toBeNull();
+    expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:The backend is offline.');
+  });
+
+  it('logs out from the liveness poll when validateUser returns 503', async () => {
+    vi.useFakeTimers();
+    const unavailable = Object.assign(new Error('offline'), { status: 503, paths: [], users: [], details: null });
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('validated')).toHaveTextContent('true');
+    api.validateUser.mockRejectedValue(unavailable);
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('validated')).toHaveTextContent('false');
+    expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:The backend is offline.');
   });
 });

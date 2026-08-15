@@ -239,6 +239,21 @@ describe('FileBrowser selectableType', () => {
     expect(listFiles).toHaveBeenCalledTimes(1);
   });
 
+  it('caps the file list height and scrolls the first selected row into view', async () => {
+    listFiles.mockResolvedValue([
+      { name: 'archive', type: 'directory' },
+      { name: 'available.xml', type: 'file' },
+    ]);
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => undefined);
+    render(<FileBrowser rootKey="techDrive" selected={['available.xml']} onSelectionChange={vi.fn()} />);
+
+    await screen.findByLabelText('Select available.xml');
+    const list = screen.getByTestId('file-browser-list');
+    expect(list).toHaveClass('max-h-[500px]', 'overflow-y-auto');
+    expect(list.querySelector('[data-path="available.xml"]')).toBeInTheDocument();
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' }));
+  });
+
   it('allows a selected directory to be deleted', async () => {
     listFiles.mockResolvedValue([{ name: 'release', type: 'directory' }]);
     deleteFiles.mockResolvedValue({});

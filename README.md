@@ -62,6 +62,15 @@ Copy the contents of `dist/` to Apache's configured `DocumentRoot`. The
 browser never contacts the backend IP directly, so no browser CORS policy is
 required; Apache handles the `/tms/` proxy hop.
 
+Client routes such as `/dashboard` must serve `index.html` so React Router can
+run. The QC build includes `.htaccess` with a rewrite to `index.html` for
+missing files. If `AllowOverride` is off, set this in the vhost instead and
+keep `/tms/` proxied to the API:
+
+```apache
+FallbackResource /index.html
+```
+
 ---
 
 ## Production Build (Static Files for Spring Boot)
@@ -105,6 +114,10 @@ http://192.168.x.x:8080/deploymentOrchestrator
 ```
 
 No `.env` changes are needed — relative URLs resolve automatically to the correct host.
+
+Unknown UI paths under `/deploymentOrchestrator` must forward to `index.html`
+(the same SPA fallback Apache needs). Without that, reloading `/dashboard`
+returns a server 404 before React loads.
 
 ---
 

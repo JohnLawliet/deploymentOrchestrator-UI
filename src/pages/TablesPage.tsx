@@ -20,8 +20,8 @@ class ValidationError extends Error {
 }
 
 const FALLBACK_PAGE = 0;
-const FALLBACK_SIZE = 50;
-const MAXIMUM_SIZE = 200;
+const FALLBACK_SIZE = 13;
+const MAXIMUM_SIZE = 100;
 
 function validationError(message: string): ValidationError {
   return new ValidationError(message);
@@ -626,7 +626,7 @@ export default function TablesPage() {
   const displayedSize = activeQuery ? Number(activeQuery.params.size ?? displayPage?.size ?? FALLBACK_SIZE) : size;
   const displayedPage = activeQuery ? Number(activeQuery.params.page ?? displayPage?.page ?? FALLBACK_PAGE) : page;
   const displayedSizeOptions = activeQuery
-    ? [...new Set([25, 50, 100, 200, displayedSize, activeMaximum].filter((value) => value > 0 && value <= activeMaximum))].sort(
+    ? [...new Set([13, 25, 50, 100, displayedSize, activeMaximum].filter((value) => value > 0 && value <= activeMaximum))].sort(
         (a, b) => a - b,
       )
     : sizeOptions;

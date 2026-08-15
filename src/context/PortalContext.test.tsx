@@ -11,6 +11,7 @@ import {
   reconcileOperationsWithSnapshot,
   reconcileViewingOperationWithSnapshot,
 } from './PortalContext';
+import { finishRegisteredOperationOnLifecycle } from '@/lib/operationProgress';
 import { frontendProfileActivity, jarProfileActivity, systemEvent, wildflyProfileActivity } from '../test/factories';
 import type { SystemEvent, SystemSnapshot } from '@/types/api-contracts';
 import type { OperationRecord } from '@/types/frontend';
@@ -552,6 +553,72 @@ describe('frontend profile system events', () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it('completes a registered JAR restart when RESOURCE_ACTIVE omits deploymentId', () => {
+    const operations = {
+      'restart-1': operationRecord({
+        deploymentId: 'restart-1',
+        registered: true,
+        resourceType: 'JAR',
+        resourceKey: 'JAR:vendor-portal',
+        progress: {
+          phaseCode: 'RESTARTING',
+          status: 'RESTARTING',
+          progressPercentage: 60,
+          component: null,
+          message: 'Restarting',
+          timestamp: '2026-08-14T00:00:00Z',
+          resourceKey: 'JAR:vendor-portal',
+          resourceType: 'JAR',
+          username: null,
+          firstReceivedAt: 1,
+          receivedAt: 1,
+          revision: 1,
+          eventKeys: [],
+          steps: [],
+        },
+      }),
+    };
+
+    expect(
+      finishRegisteredOperationOnLifecycle(operations, {
+        eventType: 'RESOURCE_ACTIVE',
+        deploymentId: null,
+        resourceKey: 'JAR:vendor-portal',
+        resourceType: 'JAR',
+        message: 'Application is active',
+      })['restart-1']?.progress,
+    ).toMatchObject({
+      progressPercentage: 100,
+      deploymentOutcome: 'SUCCEEDED',
+      status: 'COMPLETED',
+    });
+  });
+
+  it('completes a registered WAR profile start when RESOURCE_ACTIVE omits deploymentId', () => {
+    const operations = {
+      'start-1': operationRecord({
+        deploymentId: 'start-1',
+        registered: true,
+        resourceType: 'WILDFLY_PROFILE',
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+      }),
+    };
+
+    expect(
+      finishRegisteredOperationOnLifecycle(operations, {
+        eventType: 'RESOURCE_ACTIVE',
+        deploymentId: null,
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+        resourceType: 'WILDFLY_PROFILE',
+        message: 'Profile is active',
+      })['start-1']?.progress,
+    ).toMatchObject({
+      progressPercentage: 100,
+      deploymentOutcome: 'SUCCEEDED',
+      status: 'COMPLETED',
+    });
   });
 });
 

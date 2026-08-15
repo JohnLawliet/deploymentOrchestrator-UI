@@ -19,8 +19,8 @@ import type {
   JarSnapshotSummary,
   LockInfo,
   PortStatus,
-  ProcessResult,
   Profile,
+  ProfilePowerResponse,
   RuntimeResource,
   SnapshotRollbackRequest,
   UatConvertRequest,
@@ -65,8 +65,12 @@ const contextPath = (import.meta.env.VITE_BASE_PATH || '/deploymentOrchestrator'
 const apiContextPath = (import.meta.env.VITE_API_CONTEXT_PATH || contextPath).replace(/\/$/, '');
 const backendOrigin = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '');
 const apiBaseUrl = `${backendOrigin}${apiContextPath}/api`;
+export const BACKEND_OFFLINE_MESSAGE = 'The backend is offline. Try again when the service is available.';
+export const BACKEND_OFFLINE_TOAST = 'The backend is offline.';
+
 const client = axios.create({ baseURL: apiBaseUrl, headers: { 'Content-Type': 'application/json' } });
 const lockConflictListeners = new Set<(error: ApiRequestError) => void>();
+const backendUnavailableListeners = new Set<(error: ApiRequestError) => void>();
 export const techDriveHeaders = (username = getStoredPortalUsername()): Partial<ApiHeaders> =>
   username ? { 'X-TechDrive-Username': username.trim() } : {};
 
@@ -75,6 +79,26 @@ export function isPortalIdentityParameter(
 ): boolean {
   const name = String(parameter?.name || '').toLowerCase();
   return name === 'x-techdrive-username' || name === 'username';
+}
+
+const looksLikeHtml = (value: unknown): boolean => {
+  if (typeof value !== 'string') return false;
+  return /<!DOCTYPE|<html[\s>]/i.test(value.trim());
+};
+
+export function isBackendUnavailable(error: unknown): boolean {
+  const axiosError = axios.isAxiosError(error) ? error : undefined;
+  const response = axiosError?.response;
+  const status =
+    response?.status ?? (isRecord(error) && typeof error.status === 'number' ? error.status : undefined);
+  const body = response?.data ?? (isRecord(error) ? error.details : undefined);
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (isApiError(body)) return false;
+  if (status === 502 || status === 503 || status === 504) return true;
+  if (looksLikeHtml(body) || looksLikeHtml(message)) return true;
+  if (axiosError && response == null) return true;
+  if (isRecord(error) && error.request != null && error.response == null && status == null) return true;
+  return false;
 }
 
 client.interceptors.request.use((config) => {
@@ -101,13 +125,17 @@ function normalizedError(
   const response = axios.isAxiosError(error) ? error.response : undefined;
   const body = detailsOverride ?? response?.data;
   const payload = body instanceof Blob ? null : body;
-  const message = isApiError(payload)
+  const rawMessage = isApiError(payload)
     ? payload.message
     : typeof payload === 'string'
       ? payload
       : error instanceof Error
         ? error.message
         : fallback;
+  const message =
+    isBackendUnavailable(error) || looksLikeHtml(payload) || looksLikeHtml(rawMessage)
+      ? BACKEND_OFFLINE_MESSAGE
+      : rawMessage;
   const result = new Error(message || fallback) as ApiRequestError;
   result.status = response?.status;
   result.code = isApiError(payload) ? payload.code : undefined;
@@ -125,6 +153,9 @@ async function request<T>(promise: Promise<AxiosResponse<T>>, fallback: string, 
     if (axios.isCancel(error)) throw error;
     const result = normalizedError(error, fallback);
     if (notifyLockConflict && result.status === 423) lockConflictListeners.forEach((listener) => listener(result));
+    if (isBackendUnavailable(error) || isBackendUnavailable(result)) {
+      backendUnavailableListeners.forEach((listener) => listener(result));
+    }
     throw result;
   }
 }
@@ -148,6 +179,9 @@ async function blobRequest(promise: Promise<AxiosResponse<Blob>>): Promise<Downl
     }
     const result = normalizedError(error, 'Download failed', parsedBody);
     if (result.status === 423) lockConflictListeners.forEach((listener) => listener(result));
+    if (isBackendUnavailable(error) || isBackendUnavailable(result)) {
+      backendUnavailableListeners.forEach((listener) => listener(result));
+    }
     throw result;
   }
 }
@@ -167,6 +201,12 @@ export const onLockConflict = (listener: (error: ApiRequestError) => void): (() 
   lockConflictListeners.add(listener);
   return () => {
     lockConflictListeners.delete(listener);
+  };
+};
+export const onBackendUnavailable = (listener: (error: ApiRequestError) => void): (() => void) => {
+  backendUnavailableListeners.add(listener);
+  return () => {
+    backendUnavailableListeners.delete(listener);
   };
 };
 export const getJars = (): Promise<JarCatalogueResponse> =>
@@ -200,10 +240,16 @@ export const stopJar = (app: string): Promise<DeploymentStartResponse> =>
     client.post<DeploymentStartResponse>(`/dashboard/jars/${encodeURIComponent(app)}/stop`, null),
     'Unable to stop the application',
   );
-export const startProfile = (id: string): Promise<ProcessResult> =>
-  request<ProcessResult>(client.post<ProcessResult>(`/profiles/${encodeURIComponent(id)}/start`), 'Unable to start the profile');
-export const stopProfile = (id: string): Promise<ProcessResult> =>
-  request<ProcessResult>(client.post<ProcessResult>(`/profiles/${encodeURIComponent(id)}/stop`), 'Unable to stop the profile');
+export const startProfile = (id: string): Promise<ProfilePowerResponse> =>
+  request<ProfilePowerResponse>(
+    client.post<ProfilePowerResponse>(`/profiles/${encodeURIComponent(id)}/start`),
+    'Unable to start the profile',
+  );
+export const stopProfile = (id: string): Promise<ProfilePowerResponse> =>
+  request<ProfilePowerResponse>(
+    client.post<ProfilePowerResponse>(`/profiles/${encodeURIComponent(id)}/stop`),
+    'Unable to stop the profile',
+  );
 export const deployJar = (payload: JarDeploymentRequest): Promise<DeploymentStartResponse> =>
   request<DeploymentStartResponse>(
     client.post<DeploymentStartResponse>('/deployments/qc/jar', payload),

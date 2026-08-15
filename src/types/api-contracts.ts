@@ -34,6 +34,7 @@ export interface ApiError {
 export interface UserValidationResponse {
   valid: boolean;
   normalizedUsername: string;
+  notices: string[];
 }
 export interface FileRoot {
   key: RootKey;
@@ -339,6 +340,7 @@ export interface ProcessResult {
   duration: string;
   output: string[];
 }
+export type ProfilePowerResponse = ProcessResult & Partial<DeploymentStartResponse>;
 export interface PortStatus {
   port: number;
   occupied: boolean;
@@ -651,8 +653,8 @@ export interface ApiRoutes {
   'GET /api/profiles': { response: Profile[] };
   'GET /api/profiles/running': { response: Profile[] };
   'GET /api/profiles/{profileId}': { path: { profileId: string }; response: Profile };
-  'POST /api/profiles/{profileId}/start': { path: { profileId: string }; response: ProcessResult };
-  'POST /api/profiles/{profileId}/stop': { path: { profileId: string }; response: ProcessResult };
+  'POST /api/profiles/{profileId}/start': { path: { profileId: string }; response: ProfilePowerResponse };
+  'POST /api/profiles/{profileId}/stop': { path: { profileId: string }; response: ProfilePowerResponse };
   'PUT /api/profiles/{profileId}/log-subscriptions': { path: { profileId: string }; response: void; status: 200 };
   'DELETE /api/profiles/{profileId}/log-subscriptions': { path: { profileId: string }; response: void; status: 200 };
   'GET /api/wildfly/profiles/{profileId}/datasources': { path: { profileId: string }; response: WildFlyDatasource };

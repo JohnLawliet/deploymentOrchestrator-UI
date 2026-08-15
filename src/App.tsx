@@ -1,5 +1,9 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
+import UsernameGate from '@/components/UsernameGate';
+import SystemToastQueue from '@/components/SystemToastQueue';
 import PortalDashboardPage from '@/pages/PortalDashboardPage';
 import JarDeployPage from '@/pages/JarDeploymentPage';
 import WarDeployPage from '@/pages/WarDeploymentPage';
@@ -7,30 +11,105 @@ import DownloadsPage from '@/pages/DownloadsPage';
 import TablesPage from '@/pages/TablesPage';
 import UatBuildPage from '@/pages/UatBuildPage';
 import UploadPage from '@/pages/UploadPage';
-import { PortalProvider } from '@/context/PortalContext';
+import { usePortal } from '@/context/PortalContext';
 
-const basePath = import.meta.env.VITE_BASE_PATH || '/deploymentOrchestrator';
+type RedirectState = {
+  from?: {
+    pathname?: unknown;
+    search?: unknown;
+    hash?: unknown;
+  };
+};
+
+function destinationFrom(state: unknown): string | null {
+  const from = (state as RedirectState | null)?.from;
+  if (!from || typeof from.pathname !== 'string' || !from.pathname.startsWith('/') || from.pathname.startsWith('//')) {
+    return null;
+  }
+  const search = typeof from.search === 'string' ? from.search : '';
+  const hash = typeof from.hash === 'string' ? from.hash : '';
+  return `${from.pathname}${search}${hash}`;
+}
+
+function ValidationScreen() {
+  return (
+    <>
+      <main className="min-h-screen grid place-items-center p-6 bg-background">
+        <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          Validating…
+        </p>
+      </main>
+      <SystemToastQueue />
+    </>
+  );
+}
+
+function LoginRoute() {
+  const { validated } = usePortal();
+  const location = useLocation();
+
+  if (validated) return <Navigate to={destinationFrom(location.state) || '/dashboard'} replace />;
+  return (
+    <>
+      <UsernameGate />
+      <SystemToastQueue />
+    </>
+  );
+}
+
+function ProtectedRoute() {
+  const { validated, username, validationState } = usePortal();
+  const location = useLocation();
+  const restoring = Boolean(username) && !validated && validationState !== 'invalid';
+
+  if (validated) return <Outlet />;
+  if (restoring) return <ValidationScreen />;
+  return <Navigate to="/" replace state={{ from: location }} />;
+}
+
+function UnknownRoute() {
+  const { validated, username, validationState } = usePortal();
+  const restoring = Boolean(username) && !validated && validationState !== 'invalid';
+
+  if (restoring) return <ValidationScreen />;
+  return <Navigate to={validated ? '/dashboard' : '/'} replace />;
+}
+
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/" element={<LoginRoute />} />
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppLayout />}>
+          <Route path="dashboard" element={<PortalDashboardPage />} />
+          <Route path="deploy-jar" element={<JarDeployPage />} />
+          <Route path="deploy-war" element={<WarDeployPage />} />
+          <Route path="downloads" element={<DownloadsPage />} />
+          <Route path="create-uat-build" element={<UatBuildPage />} />
+          <Route path="upload" element={<UploadPage />} />
+          <Route path="tables" element={<TablesPage />} />
+        </Route>
+      </Route>
+      <Route path="*" element={<UnknownRoute />} />
+    </Routes>
+  );
+}
 
 function App() {
-  return (
-    <PortalProvider>
-      <BrowserRouter basename={basePath}>
-        <Routes>
-          <Route element={<AppLayout />}>
-            <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="dashboard" element={<PortalDashboardPage />} />
-            <Route path="deploy-jar" element={<JarDeployPage />} />
-            <Route path="deploy-war" element={<WarDeployPage />} />
-            <Route path="downloads" element={<DownloadsPage />} />
-            <Route path="create-uat-build" element={<UatBuildPage />} />
-            <Route path="upload" element={<UploadPage />} />
-            <Route path="tables" element={<TablesPage />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </PortalProvider>
-  );
+  const { reportInteraction, setViewingOperation } = usePortal();
+  const location = useLocation();
+  const previousPathRef = useRef(location.pathname);
+
+  useEffect(() => {
+    if (previousPathRef.current !== location.pathname) {
+      reportInteraction?.();
+      setViewingOperation(null);
+      previousPathRef.current = location.pathname;
+    }
+  }, [location.pathname, reportInteraction, setViewingOperation]);
+
+  return <AppRoutes />;
 }
 
 export default App;

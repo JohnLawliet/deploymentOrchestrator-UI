@@ -139,7 +139,6 @@ export default function OperationProgressPanel() {
     'STARTING';
   const status = rollbackRestoring ? 'RESTORING' : rollbackRestored ? 'RESTORED' : rollbackFailed ? 'FAILED' : rawStatus;
   const statusTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(rawStatus);
-  const phaseCode = statusTerminal && !rollbackRestoring && !rollbackRestored ? undefined : operationProgress?.phaseCode;
   const progressValue = operationProgress?.progressPercentage;
   const recordProgress = record?.progressPercentage;
   const suppliedProgress = Number.isFinite(progressValue)
@@ -151,11 +150,15 @@ export default function OperationProgressPanel() {
   const failed = deploymentFailed || rollbackFailed || rawStatus.includes('FAILED');
   const cancelled = status === 'CANCELLED';
   const complete = completed || terminalStates.has(status);
-  const progress = completed
-    ? 100
-    : (failed && !rollbackRestoring && !rollbackRestored) || cancelled
-      ? undefined
-      : (suppliedProgress ?? (terminalStates.has(status) ? 100 : undefined));
+  const lifecycleComplete = !failed && !cancelled && (status === 'ACTIVE' || status === 'INACTIVE');
+  const phaseCode =
+    (statusTerminal || lifecycleComplete) && !rollbackRestoring && !rollbackRestored ? undefined : operationProgress?.phaseCode;
+  const progress =
+    completed || lifecycleComplete
+      ? 100
+      : (failed && !rollbackRestoring && !rollbackRestored) || cancelled
+        ? undefined
+        : (suppliedProgress ?? (terminalStates.has(status) ? 100 : undefined));
   const progressWidth = Math.min(100, Math.max(0, progress ?? 32));
   const restoredState = live?.restoredResourceState;
   const message = rollbackRestoring

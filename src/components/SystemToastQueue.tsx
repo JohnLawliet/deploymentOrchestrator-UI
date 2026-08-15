@@ -1,16 +1,19 @@
 import { useEffect } from 'react';
 import { CheckCircle2, TriangleAlert, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BACKEND_OFFLINE_TOAST } from '@/lib/contractApi';
 import { usePortal } from '@/context/PortalContext';
 import type { SystemToast } from '@/types/frontend';
 
 const AUTO_DISMISS_MS = 5000;
 
 function Toast({ toast, onDismiss }: { toast: SystemToast; onDismiss: (id: string) => void }) {
+  const persist = toast.message === BACKEND_OFFLINE_TOAST;
   useEffect(() => {
+    if (persist) return undefined;
     const timeout = window.setTimeout(() => onDismiss(toast.id), AUTO_DISMISS_MS);
     return () => window.clearTimeout(timeout);
-  }, [onDismiss, toast.id]);
+  }, [onDismiss, persist, toast.id]);
 
   const warning = toast.variant === 'warning';
   const Icon = warning ? TriangleAlert : CheckCircle2;

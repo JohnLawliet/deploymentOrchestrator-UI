@@ -35,6 +35,7 @@ vi.mock('axios', () => ({
 }));
 
 import {
+  BACKEND_OFFLINE_MESSAGE,
   convertUatBuild,
   createUpload,
   deleteFiles,
@@ -52,7 +53,9 @@ import {
   getRuntimeResource,
   getWarSnapshots,
   isLockConflict,
+  isBackendUnavailable,
   onLockConflict,
+  onBackendUnavailable,
   reportUserActivity,
   resolvedTerminalEventUrl,
   rollbackJar,
@@ -137,6 +140,44 @@ describe('presence and lock contracts', () => {
     expect(isLockConflict({ status: 409 })).toBe(false);
     unsubscribe();
   });
+
+  it('treats Apache 503 HTML and network failures as backend offline, not 500 JSON', async () => {
+    const listener = vi.fn();
+    const unsubscribe = onBackendUnavailable(listener);
+    const apacheHtml =
+      '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Service unavailable!</title></head></html>';
+
+    client.get.mockRejectedValueOnce({
+      response: { status: 503, data: apacheHtml },
+    });
+    await expect(validateUser('alice')).rejects.toMatchObject({
+      status: 503,
+      message: BACKEND_OFFLINE_MESSAGE,
+    });
+    expect(listener).toHaveBeenCalledOnce();
+    expect(isBackendUnavailable({ response: { status: 503, data: apacheHtml } })).toBe(true);
+
+    listener.mockClear();
+    client.get.mockRejectedValueOnce({
+      response: {
+        status: 500,
+        data: { message: 'Internal failure', code: 'INTERNAL', paths: [], users: [], deploymentId: null },
+      },
+    });
+    await expect(validateUser('alice')).rejects.toMatchObject({ status: 500, message: 'Internal failure' });
+    expect(listener).not.toHaveBeenCalled();
+    expect(
+      isBackendUnavailable({
+        response: {
+          status: 500,
+          data: { message: 'Internal failure', code: 'INTERNAL' },
+        },
+      }),
+    ).toBe(false);
+
+    expect(isBackendUnavailable({ request: {} })).toBe(true);
+    unsubscribe();
+  });
 });
 
 describe('executeDatabaseQuery', () => {
@@ -167,7 +208,20 @@ describe('executeDatabaseQuery', () => {
   });
 
   it('validates with the candidate username header and no query parameter', async () => {
-    await validateUser(' candidate-user ');
+    client.get.mockResolvedValueOnce({
+      data: {
+        valid: true,
+        normalizedUsername: 'candidate-user',
+        notices: ['unable to access techdrive'],
+      },
+      headers: {},
+    });
+
+    await expect(validateUser(' candidate-user ')).resolves.toEqual({
+      valid: true,
+      normalizedUsername: 'candidate-user',
+      notices: ['unable to access techdrive'],
+    });
 
     expect(client.get).toHaveBeenCalledWith('/users/validate', {
       headers: { 'X-TechDrive-Username': 'candidate-user' },

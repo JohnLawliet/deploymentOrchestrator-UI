@@ -149,7 +149,7 @@ describe('PortalDashboardPage profile contract', () => {
       wildflyProfileActivityMap: {},
       jarProfileActivityMap: {},
       replaceProfileActivities: vi.fn(),
-      reconcileResourceActivity: vi.fn(() => new Promise(() => {})),
+      reconcileResourceActivity: vi.fn().mockResolvedValue({ id: profile.id, activeOperationId: null }),
       registerOperation: vi.fn(),
       setViewingOperation: vi.fn(),
       operations: {},
@@ -467,6 +467,56 @@ describe('PortalDashboardPage profile contract', () => {
 
     expect(api.stopJar).toHaveBeenCalledWith('Orders');
     expect(context.value!.registerOperation).toHaveBeenCalledWith({ deploymentId: 'stop-1' }, 'JAR:orders', 'Stop JAR · Orders');
+  });
+
+  it('starts an inactive WildFly profile through a tracked dashboard operation', async () => {
+    api.getProfiles.mockResolvedValue([{ ...profile, status: 'INACTIVE' }]);
+    api.startProfile.mockResolvedValue({ deploymentId: 'start-1' });
+    const user = userEvent.setup();
+    render(<PortalDashboardPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
+
+    expect(api.startProfile).toHaveBeenCalledWith('opaque/profile:42');
+    expect(context.value!.registerOperation).toHaveBeenCalledWith(
+      { deploymentId: 'start-1', resourceType: 'WILDFLY_PROFILE', profileId: 'opaque/profile:42' },
+      'WILDFLY_PROFILE:opaque/profile:42',
+      'Start profile · payments-qc',
+    );
+  });
+
+  it('registers a profile start from reconciled activity when the start body omits deploymentId', async () => {
+    api.getProfiles.mockResolvedValue([{ ...profile, status: 'INACTIVE' }]);
+    api.startProfile.mockResolvedValue({});
+    context.value!.reconcileResourceActivity.mockResolvedValue({
+      id: profile.id,
+      activeOperationId: 'live-start-1',
+    });
+    const user = userEvent.setup();
+    render(<PortalDashboardPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
+
+    expect(context.value!.registerOperation).toHaveBeenCalledWith(
+      { deploymentId: 'live-start-1', resourceType: 'WILDFLY_PROFILE', profileId: 'opaque/profile:42' },
+      'WILDFLY_PROFILE:opaque/profile:42',
+      'Start profile · payments-qc',
+    );
+  });
+
+  it('stops an active WildFly profile through a tracked dashboard operation', async () => {
+    api.stopProfile.mockResolvedValue({ deploymentId: 'stop-profile-1' });
+    const user = userEvent.setup();
+    render(<PortalDashboardPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    expect(api.stopProfile).toHaveBeenCalledWith('opaque/profile:42');
+    expect(context.value!.registerOperation).toHaveBeenCalledWith(
+      { deploymentId: 'stop-profile-1', resourceType: 'WILDFLY_PROFILE', profileId: 'opaque/profile:42' },
+      'WILDFLY_PROFILE:opaque/profile:42',
+      'Stop profile · payments-qc',
+    );
   });
 
   it("disables another user's locked profile mutations and displays the lock metadata", async () => {

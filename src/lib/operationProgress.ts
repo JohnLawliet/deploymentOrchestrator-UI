@@ -299,7 +299,7 @@ export function applyOperationFinished(
 
   const normalized = String(outcome || '').toUpperCase();
   const failed = normalized === 'FAILED';
-  const succeeded = normalized === 'COMPLETED' || normalized === 'SUCCEEDED';
+  const succeeded = normalized === 'COMPLETED' || normalized === 'SUCCEEDED' || normalized === 'ACTIVE';
   if (!failed && !succeeded) return operations;
 
   const status = failed ? 'FAILED' : 'COMPLETED';
@@ -346,6 +346,42 @@ export function applyOperationFinished(
       progress,
     },
   };
+}
+
+const REGISTERED_LIFECYCLE_FINISH_EVENTS = new Set(['RESOURCE_ACTIVE', 'RESOURCE_INACTIVE', 'DEPLOYMENT_SUCCEEDED']);
+
+function isTrackedRuntimeResource(resourceType: string | null | undefined, resourceKey: string): boolean {
+  return (
+    resourceType === 'JAR' ||
+    resourceType === 'WILDFLY_PROFILE' ||
+    resourceKey.startsWith('JAR:') ||
+    resourceKey.startsWith('WILDFLY_PROFILE:')
+  );
+}
+
+export function finishRegisteredOperationOnLifecycle(
+  operations: OperationMap,
+  event: Pick<SystemEvent, 'eventType' | 'deploymentId' | 'resourceKey' | 'resourceType' | 'message'>,
+  now = Date.now(),
+): OperationMap {
+  if (!REGISTERED_LIFECYCLE_FINISH_EVENTS.has(event.eventType)) return operations;
+  const resourceKey = event.resourceKey ?? '';
+  if (!isTrackedRuntimeResource(event.resourceType, resourceKey)) return operations;
+
+  const deploymentId = deploymentIdOf(event);
+  if (deploymentId && operations[deploymentId]) {
+    return applyOperationFinished(operations, deploymentId, 'COMPLETED', event.message, now);
+  }
+
+  const match = Object.values(operations).find(
+    (operation) =>
+      operation.registered &&
+      !isOperationTerminal(operation) &&
+      operation.resourceKey === resourceKey &&
+      isTrackedRuntimeResource(operation.resourceType, String(operation.resourceKey || '')),
+  );
+  const matchedId = deploymentIdOf(match);
+  return matchedId ? applyOperationFinished(operations, matchedId, 'COMPLETED', event.message, now) : operations;
 }
 
 export function isOperationTerminal(operation: OperationRecord | null | undefined): boolean {

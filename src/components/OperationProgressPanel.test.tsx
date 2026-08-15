@@ -193,6 +193,37 @@ describe('OperationProgressPanel revised output contracts', () => {
     expect(screen.queryByRole('button', { name: 'Download full log' })).not.toBeInTheDocument();
   });
 
+  it('completes JAR restart progress when the resource is already ACTIVE', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'restart-1',
+      resourceType: 'JAR',
+      resourceKey: 'JAR:vendor-portal',
+      label: 'Restart JAR · vendorPortal',
+    });
+    portal.operations = {
+      'restart-1': {
+        deploymentId: 'restart-1',
+        statusEvent: 'RESOURCE_ACTIVE',
+        message: 'Application is active',
+        progress: operationProgressState({
+          status: 'RESTARTING',
+          phaseCode: 'RESTARTING',
+          progressPercentage: 60,
+          message: 'Restarting application',
+        }),
+      },
+    };
+
+    render(<OperationProgressPanel />);
+
+    expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.queryByText('60%')).not.toBeInTheDocument();
+    expect(screen.queryByText('RESTARTING')).not.toBeInTheDocument();
+    expect(screen.queryByText('Phase:')).not.toBeInTheDocument();
+    expect(screen.getByText('Application is active')).toBeInTheDocument();
+  });
+
   it('replaces stale progress with a backend lifecycle failure and exposes an available log', async () => {
     portal.viewingOperation = operationRecord({
       deploymentId: 'deployment-1',

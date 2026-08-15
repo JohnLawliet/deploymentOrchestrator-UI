@@ -2,10 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import type { EventSourceMessage } from '@microsoft/fetch-event-source';
 import {
+  BACKEND_OFFLINE_TOAST,
   eventUrl,
   getLocks,
   getProfiles,
   getRuntimeResource,
+  isBackendUnavailable,
+  onBackendUnavailable,
   onLockConflict,
   reportUserActivity,
   techDriveHeaders,
@@ -25,6 +28,7 @@ import { deploymentIdOf } from '@/lib/deploymentIdentity';
 import { normalizeDashboardProfile, normalizeRuntimeActivity, normalizeSystemSnapshot } from '@/lib/runtimeActivity';
 import {
   applyOperationFinished,
+  finishRegisteredOperationOnLifecycle,
   isOperationTerminal,
   reduceOperationProgress,
   registerOperationInMap,
@@ -498,12 +502,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const lockLabelsRef = useRef<Record<string, string>>({});
   const lockLabelOrderRef = useRef<string[]>([]);
   const systemToastSequenceRef = useRef(0);
+  const validatedRef = useRef(validated);
   useEffect(() => {
     mapsRef.current = activityMaps;
   }, [activityMaps]);
   useEffect(() => {
     operationsRef.current = operations;
   }, [operations]);
+  validatedRef.current = validated;
   const updateOperations = useCallback((updater: OperationMap | ((current: OperationMap) => OperationMap)) => {
     setOperations((current) => {
       const next = typeof updater === 'function' ? updater(current) : updater;
@@ -590,13 +596,44 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const showSystemToast = useCallback((message: string | null, variant: SystemToast['variant']) => {
     if (!message?.trim()) return;
     const id = `system-${Date.now()}-${systemToastSequenceRef.current++}`;
-    setSystemToasts((current) => [...current, { id, message, variant }].slice(-5));
+    setSystemToasts((current) => {
+      if (message === BACKEND_OFFLINE_TOAST && current.some((toast) => toast.message === BACKEND_OFFLINE_TOAST)) {
+        return current;
+      }
+      return [...current, { id, message, variant }].slice(-5);
+    });
   }, []);
 
   const clearProfileLogs = useCallback((profileId: string) => {
     if (!profileId) return;
     setProfileLogLines((current) => ({ ...current, [profileId]: [] }));
   }, []);
+
+  const changeUser = useCallback(() => {
+    sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
+    setValidated(false);
+    setUsername('');
+    setActivityMaps({ wildflyProfileActivityMap: {}, jarProfileActivityMap: {}, frontendProfileActivityMap: {} });
+    updateOperations({});
+    setViewingOperation(null);
+    setProfileLogLines({});
+    setPresenceState(replacePresence([]));
+    setLockState(replaceLocks([]));
+    setOperationToasts([]);
+    setSystemToasts([]);
+    completionKeysRef.current = [];
+    lastActivityReportRef.current = null;
+    lockLabelsRef.current = {};
+    lockLabelOrderRef.current = [];
+    setValidationState('idle');
+    setSystemStatus('disconnected');
+    setSnapshotRevision(0);
+  }, [updateOperations]);
+
+  const handleBackendUnavailable = useCallback(() => {
+    if (validatedRef.current) changeUser();
+    showSystemToast(BACKEND_OFFLINE_TOAST, 'warning');
+  }, [changeUser, showSystemToast]);
 
   const acceptUser = useCallback(async (candidate: string): Promise<boolean> => {
     const entered = candidate.trim();
@@ -607,7 +644,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setValidationState('validating');
     setValidationError('');
     try {
-      await validateUser(entered);
+      const response = await validateUser(entered);
+      for (const notice of response.notices ?? []) {
+        showSystemToast(notice, 'warning');
+      }
       sessionStorage.setItem(PORTAL_USERNAME_SESSION_KEY, entered);
       setUsername(entered);
       setValidated(true);
@@ -620,7 +660,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       setValidationError(errorMessage(error, 'Unable to validate username.'));
       return false;
     }
-  }, []);
+  }, [showSystemToast]);
 
   useEffect(() => {
     if (username && !validated) acceptUser(username);
@@ -652,6 +692,22 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       reconcileLocks().catch(() => {});
     });
   }, [reconcileLocks, validated]);
+
+  useEffect(() => {
+    return onBackendUnavailable(() => {
+      handleBackendUnavailable();
+    });
+  }, [handleBackendUnavailable]);
+
+  useEffect(() => {
+    if (!validated || !username) return undefined;
+    const timer = window.setInterval(() => {
+      validateUser(username).catch((error) => {
+        if (isBackendUnavailable(error)) handleBackendUnavailable();
+      });
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [handleBackendUnavailable, username, validated]);
 
   useEffect(() => {
     const expiries = Object.values(lockState.locks)
@@ -815,11 +871,12 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const jarResourceKey = jarResourceKeyForReconciliation(event);
         if (jarResourceKey) reconcileResourceActivity(jarResourceKey).catch(() => {});
         const deploymentId = deploymentIdOf(event);
-        if (deploymentId)
-          updateOperations((current) => ({
-            ...current,
-            [deploymentId]: mergeOperationEventRecord(current[deploymentId], event),
-          }));
+        updateOperations((current) => {
+          const merged = deploymentId
+            ? { ...current, [deploymentId]: mergeOperationEventRecord(current[deploymentId], event) }
+            : current;
+          return finishRegisteredOperationOnLifecycle(merged, event);
+        });
       } catch {
         /* ignore malformed or unsupported event payloads; stream state is unchanged */
       }
@@ -836,20 +893,35 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       },
       onmessage: handleMessage,
       onclose: () => {
-        if (!controller.signal.aborted) {
-          setSystemStatus('reconnecting');
+        if (controller.signal.aborted) return;
+        if (opened) {
+          handleBackendUnavailable();
           throw new Error('System event stream closed');
         }
+        setSystemStatus('reconnecting');
+        throw new Error('System event stream closed');
       },
       onerror: () => {
-        if (!controller.signal.aborted) setSystemStatus('reconnecting');
+        if (controller.signal.aborted) return;
+        if (opened) {
+          handleBackendUnavailable();
+          throw new Error('System event stream disconnected');
+        }
+        setSystemStatus('reconnecting');
         return 3000;
       },
     }).catch(() => {
-      if (!controller.signal.aborted) setSystemStatus('reconnecting');
+      if (controller.signal.aborted) return;
+      if (opened) {
+        handleBackendUnavailable();
+        return;
+      }
+      setSystemStatus('reconnecting');
     });
     return () => controller.abort();
   }, [
+    changeUser,
+    handleBackendUnavailable,
     username,
     validated,
     reconcileLocks,
@@ -859,27 +931,6 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     showSystemToast,
     updateOperations,
   ]);
-
-  const changeUser = useCallback(() => {
-    sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
-    setValidated(false);
-    setUsername('');
-    setActivityMaps({ wildflyProfileActivityMap: {}, jarProfileActivityMap: {}, frontendProfileActivityMap: {} });
-    updateOperations({});
-    setViewingOperation(null);
-    setProfileLogLines({});
-    setPresenceState(replacePresence([]));
-    setLockState(replaceLocks([]));
-    setOperationToasts([]);
-    setSystemToasts([]);
-    completionKeysRef.current = [];
-    lastActivityReportRef.current = null;
-    lockLabelsRef.current = {};
-    lockLabelOrderRef.current = [];
-    setValidationState('idle');
-    setSystemStatus('disconnected');
-    setSnapshotRevision(0);
-  }, [updateOperations]);
 
   const registerOperation = useCallback(
     (operation: Partial<OperationRecord>, resourceKey: string, label: string): OperationRecord => {

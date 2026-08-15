@@ -232,9 +232,16 @@ export default function PortalDashboardPage() {
     setSubmitting(key);
     setError('');
     try {
-      if (active) await stopProfile(profile.id);
-      else await startProfile(profile.id);
-      await reconcileResourceActivity(key);
+      const result = active ? await stopProfile(profile.id) : await startProfile(profile.id);
+      const reconciled = await reconcileResourceActivity(key);
+      const deploymentId = result.deploymentId || reconciled?.activeOperationId;
+      if (deploymentId) {
+        registerOperation(
+          { deploymentId, resourceType: 'WILDFLY_PROFILE', profileId: profile.id },
+          key,
+          `${verb} profile · ${profile.name}`,
+        );
+      }
     } catch (reason: unknown) {
       setError(isLockConflict(reason) ? `Resource conflict: ${errorMessage(reason)}` : errorMessage(reason));
     } finally {
