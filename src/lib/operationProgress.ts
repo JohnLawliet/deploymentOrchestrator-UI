@@ -138,8 +138,11 @@ export function reduceOperationProgress(operations: OperationMap, event: Operati
       : failure && previous?.rollbackState === 'RESTORING'
         ? 'FAILED'
         : (previous?.rollbackState ?? null);
-  const deploymentOutcome =
-    failure ? 'FAILED' : supplied.phaseCode === 'COMPLETED' || status === 'COMPLETED' ? 'SUCCEEDED' : (previous?.deploymentOutcome ?? null);
+  const deploymentOutcome = failure
+    ? 'FAILED'
+    : supplied.phaseCode === 'COMPLETED' || status === 'COMPLETED'
+      ? 'SUCCEEDED'
+      : (previous?.deploymentOutcome ?? null);
   const step: ProgressStep = {
     timestamp: event.timestamp,
     phaseCode: supplied.phaseCode,

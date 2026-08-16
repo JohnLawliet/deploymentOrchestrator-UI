@@ -365,24 +365,27 @@ export default function UploadPage() {
     wildflyQuery,
   ]);
 
-  const showTutorialStep = useCallback((step: number): Promise<void> => {
-    setTutorialStep(step);
-    if (step === 1) {
-      setMainMode('hotfix');
-      setHotfixType('');
-    } else if (step === 2 || step === 3) {
-      setMainMode('hotfix');
-      setHotfixType('frontend');
-      selectTutorialFrontendProfile();
-      if (step === 3) setSources(tutorialFrontendSources);
-    } else if (step >= 4) {
-      setMainMode('hotfix');
-      setHotfixType('war');
-      selectTutorialWildflyProfile();
-      setSources(tutorialWarSources);
-    }
-    return new Promise((resolve) => window.setTimeout(resolve, 0));
-  }, [selectTutorialFrontendProfile, selectTutorialWildflyProfile]);
+  const showTutorialStep = useCallback(
+    (step: number): Promise<void> => {
+      setTutorialStep(step);
+      if (step === 1) {
+        setMainMode('hotfix');
+        setHotfixType('');
+      } else if (step === 2 || step === 3) {
+        setMainMode('hotfix');
+        setHotfixType('frontend');
+        selectTutorialFrontendProfile();
+        if (step === 3) setSources(tutorialFrontendSources);
+      } else if (step >= 4) {
+        setMainMode('hotfix');
+        setHotfixType('war');
+        selectTutorialWildflyProfile();
+        setSources(tutorialWarSources);
+      }
+      return new Promise((resolve) => window.setTimeout(resolve, 0));
+    },
+    [selectTutorialFrontendProfile, selectTutorialWildflyProfile],
+  );
 
   const resetTutorial = useCallback(() => {
     const snapshot = tutorialSnapshotRef.current;

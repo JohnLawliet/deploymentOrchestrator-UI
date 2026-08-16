@@ -146,35 +146,56 @@ export const jarTutorialSteps: TutorialStep[] = [
 
 export const uatBuildTutorialSteps: TutorialStep[] = [
   {
-    target: '[data-tour="uat-inputs"]',
-    title: 'Select the build inputs',
-    instruction: 'Choose the application, one UAT WAR from Tech Drive, and the matching exploded WAR directory from Jenkins.',
-    why: 'The UAT build combines these two inputs to create the deliverable package.',
+    target: '[data-tour="uat-application"]',
+    title: 'Select an application',
+    instruction:
+      'Select an application to determine which files are overlaid, replaced, or deleted when the Jenkins exploded WAR is converted to a UAT build.',
+    why: 'WAR applications come from GET /api/dashboard/war-applications. Conversion uses filesFor("uat", application), not the QC file list.',
+  },
+  {
+    target: '[data-tour="uat-source"]',
+    title: 'Select the UAT WAR',
+    instruction:
+      'Select the UAT WAR from Tech Drive. Its configuration is merged onto the Jenkins build. Standard overlays are safe for adding or removing properties, filters, or servlets. To modify an existing one, place a correctly formatted additionalConfig.toml beside this WAR and enable the checkbox.',
+    why: 'sourceWarPath is resolved under your Tech Drive root. When enabled, a sibling additionalConfig.toml is locked, snapshotted, parsed, and applied; otherwise it is skipped. The configured UAT overlay always runs.',
+  },
+  {
+    target: '[data-tour="uat-jenkins"]',
+    title: 'Select the Jenkins exploded WAR',
+    instruction:
+      'Select the Jenkins exploded WAR directory. It is the base build: the UAT WAR is merged onto it, while Jenkins-only files remain in the generated WAR.',
+    why: 'jenkinsExplodedWarPath is resolved under jenkinsBuild and packaged as the conversion base. Configured UAT-only files are copied in; Jenkins-only files remain.',
   },
   {
     target: '[data-tour="uat-inspect"]',
-    title: 'Inspect and lock the inputs',
-    instruction: 'Select Inspect and lock after choosing the inputs and any optional additional configuration.',
-    why: 'The backend validates both paths and locks them while you resolve the build decisions.',
+    title: 'Inspect and lock',
+    instruction:
+      'Validate and snapshot both paths, then lock the UAT WAR, Jenkins directory, and additionalConfig.toml when enabled. It also finds same-named files at different UAT paths. Inspect starts a timer: resolve duplicates and convert before the lock expires.',
+    why: 'POST /api/uat-builds/preflight snapshots the WAR, Jenkins tree, and optional TOML; takes write leases for uatLockTtl; extracts the UAT WAR; and returns duplicates, default resolutions, informational missing Jenkins files, and blocking missing UAT files.',
   },
   {
     target: '[data-tour="uat-review"]',
     title: 'Resolve preflight findings',
     instruction:
-      'Review warnings and missing files. Select a candidate for every duplicate filename if the backend reports a conflict.',
-    why: 'An explicit duplicate choice prevents the build from silently copying the wrong file.',
+      'Choose the correct path for each duplicate. Entries in duplicate-file-defaults.properties, such as web.xml, are preselected. Files missing from Jenkins are copied automatically. Conversion requires all UAT files and duplicate choices.',
+    why: 'POST /api/uat-builds/convert requires no missingUatFiles and a selection for every duplicateFiles key. missingFromJenkinsFiles need no choice. This tutorial uses sample findings and does not call preflight.',
+    targetWaitTimeout: 3000,
   },
   {
     target: '[data-tour="uat-convert"]',
     title: 'Create the UAT build',
-    instruction: 'Select Convert when blocking findings are resolved, then wait for the operation status to complete.',
-    why: 'Conversion packages the build and generates its SHA-256 hash for handoff.',
+    instruction:
+      'Resolve conflicts and convert before the timer expires. This packages the Jenkins base with the UAT overlay, applies additionalConfig.toml when required, writes the WAR to Tech Drive, and generates its SHA-256 hash.',
+    why: 'POST /api/uat-builds/convert sends lockId and duplicateSelections, returning 202 with an operationId. The worker packages the Jenkins snapshot, applies the UAT conversion and optional TOML, writes and hashes the WAR, and streams progress. The lock must still be valid.',
+    targetWaitTimeout: 3000,
   },
   {
     target: '[data-tour="uat-opm"]',
-    title: 'Copy the OPM handoff message',
-    instruction: 'After a successful conversion, open the final step and use Copy OPM message.',
-    why: 'The generated message includes the output path and hash needed for the next handoff.',
+    title: 'Copy the OPM message',
+    instruction:
+      'After conversion, copy this message to OPM. It provides the Tech Drive WAR location and hash for verification.',
+    why: 'A completed UatOperationResponse includes outputPath, warFileName, and sha256. This tutorial displays sample data only; no conversion runs and no WAR is written.',
+    targetWaitTimeout: 3000,
   },
 ];
 

@@ -118,7 +118,12 @@ describe('PageTutorial', () => {
   it('reports the initial and subsequently active steps to its owner', async () => {
     const user = userEvent.setup();
     const onStepChange = vi.fn();
-    render(<PageTutorial onStepChange={onStepChange} steps={[{ target: '[data-tour="example"]', title: 'Example', instruction: 'Example instruction.' }]} />);
+    render(
+      <PageTutorial
+        onStepChange={onStepChange}
+        steps={[{ target: '[data-tour="example"]', title: 'Example', instruction: 'Example instruction.' }]}
+      />,
+    );
 
     await user.click(screen.getByRole('button', { name: 'Tutorial' }));
     await user.click(screen.getByRole('button', { name: 'Trigger step two' }));

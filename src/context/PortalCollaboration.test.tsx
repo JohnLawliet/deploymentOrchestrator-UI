@@ -228,7 +228,12 @@ describe('PortalProvider collaboration contracts', () => {
     const options = streamOptions();
     const frontend = frontendProfileActivity({ profileUuid: 'frontend-2', profileName: 'payments-ui', jarProfileUuid: 'jar-2' });
     const nestedFrontend = frontendProfileActivity({ ...frontend, profileName: 'nested-payments-ui' });
-    const jar = jarProfileActivity({ id: 'jar-2', applicationName: 'payments', frontendProfileUuid: 'frontend-2', frontendProfile: nestedFrontend });
+    const jar = jarProfileActivity({
+      id: 'jar-2',
+      applicationName: 'payments',
+      frontendProfileUuid: 'frontend-2',
+      frontendProfile: nestedFrontend,
+    });
     const event = systemEvent({
       eventType: 'FRONTEND_ASSOCIATION_UPDATED',
       deploymentId: 'deployment-2',
@@ -378,7 +383,11 @@ describe('PortalProvider collaboration contracts', () => {
     const initialResourceRequests = api.getRuntimeResource.mock.calls.length;
     const initialProfileRequests = api.getProfiles.mock.calls.length;
 
-    for (const resources of [[], [{ profile: 'orders', issues: ['unhealthy'] }], [{ profile: 'orders' }, { profile: 'billing' }]]) {
+    for (const resources of [
+      [],
+      [{ profile: 'orders', issues: ['unhealthy'] }],
+      [{ profile: 'orders' }, { profile: 'billing' }],
+    ]) {
       send(
         options,
         systemEvent({

@@ -706,8 +706,6 @@ describe('OperationProgressPanel revised output contracts', () => {
     render(<OperationProgressPanel />);
 
     await user.hover(screen.getByRole('button', { name: /Extract WAR/ }));
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      'Unpacks the selected Tech Drive WAR into a staging directory.',
-    );
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Unpacks the selected Tech Drive WAR into a staging directory.');
   });
 });

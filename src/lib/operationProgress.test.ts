@@ -285,7 +285,12 @@ describe('operation progress canonical correlation', () => {
   });
 
   it('does not complete JAR restart on RESOURCE_STARTING', () => {
-    const registered = registerOperationInMap({}, { deploymentId: 'restart-1', resourceType: 'JAR' }, 'JAR:vendor-portal', 'Restart');
+    const registered = registerOperationInMap(
+      {},
+      { deploymentId: 'restart-1', resourceType: 'JAR' },
+      'JAR:vendor-portal',
+      'Restart',
+    );
     expect(
       finishRegisteredOperationOnLifecycle(registered, {
         eventType: 'RESOURCE_STARTING',
@@ -324,13 +329,15 @@ describe('operation progress canonical correlation', () => {
       'Stop profile · payments-qc',
     );
 
-    expect(finishRegisteredOperationOnLifecycle(registered, {
-      eventType: 'RESOURCE_INACTIVE',
-      deploymentId: null,
-      resourceKey: 'WILDFLY_PROFILE:profile-1',
-      resourceType: 'WILDFLY_PROFILE',
-      message: 'Profile stopped',
-    })).toBe(registered);
+    expect(
+      finishRegisteredOperationOnLifecycle(registered, {
+        eventType: 'RESOURCE_INACTIVE',
+        deploymentId: null,
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+        resourceType: 'WILDFLY_PROFILE',
+        message: 'Profile stopped',
+      }),
+    ).toBe(registered);
   });
 
   it('does not complete a dashboard profile start from RESOURCE_ACTIVE with the matching deployment ID', () => {
@@ -341,12 +348,14 @@ describe('operation progress canonical correlation', () => {
       'Start profile · payments-qc',
     );
 
-    expect(finishRegisteredOperationOnLifecycle(registered, {
-      eventType: 'RESOURCE_ACTIVE',
-      deploymentId: 'start-1',
-      resourceKey: 'WILDFLY_PROFILE:profile-1',
-      resourceType: 'WILDFLY_PROFILE',
-      message: 'WildFly process is active',
-    })).toBe(registered);
+    expect(
+      finishRegisteredOperationOnLifecycle(registered, {
+        eventType: 'RESOURCE_ACTIVE',
+        deploymentId: 'start-1',
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+        resourceType: 'WILDFLY_PROFILE',
+        message: 'WildFly process is active',
+      }),
+    ).toBe(registered);
   });
 });

@@ -786,7 +786,7 @@ export default function JarDeploymentPage() {
                   </Notice>
                 )}
                 {frontendMode === FRONTEND_MODES.DEPLOY && (
-                    <div className="space-y-4">
+                  <div className="space-y-4">
                     <div data-tour="jar-frontend-profile">
                       <FormItem>
                         <FormLabel>Frontend profile (required)</FormLabel>
@@ -875,12 +875,7 @@ export default function JarDeploymentPage() {
             )}
             {submitting && <Notice>Verifying resources, acquiring deployment locks, and starting the operation…</Notice>}
             {error && <Notice tone="error">{structuredDeploymentError ? <strong>{error}</strong> : error}</Notice>}
-            <Button
-              type="submit"
-              disabled={formInvalid || formDisabled || profileBusy}
-              className="gap-2"
-              data-tour="jar-deploy"
-            >
+            <Button type="submit" disabled={formInvalid || formDisabled || profileBusy} className="gap-2" data-tour="jar-deploy">
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
               {submitting ? 'Verifying and locking…' : 'Deploy JAR'}
             </Button>

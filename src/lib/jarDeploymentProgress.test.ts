@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isJarDeploymentPhase, jarDeploymentPhase, jarDeploymentPhaseLabel, jarDeploymentTimeline } from './jarDeploymentProgress';
+import {
+  isJarDeploymentPhase,
+  jarDeploymentPhase,
+  jarDeploymentPhaseLabel,
+  jarDeploymentTimeline,
+} from './jarDeploymentProgress';
 
 describe('JAR deployment progress definitions', () => {
   it.each([
@@ -39,8 +44,6 @@ describe('JAR deployment progress definitions', () => {
     for (const step of timeline) {
       expect(step.description.trim().length).toBeGreaterThan(0);
     }
-    expect(timeline.find((step) => step.id === 'deploy')?.description).toBe(
-      'Copies the new JAR into the runtime location.',
-    );
+    expect(timeline.find((step) => step.id === 'deploy')?.description).toBe('Copies the new JAR into the runtime location.');
   });
 });

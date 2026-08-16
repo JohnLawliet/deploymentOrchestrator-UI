@@ -13,7 +13,13 @@ type StreamOptions = {
 };
 type Stream = { url: string; options: StreamOptions };
 type FileBrowserMockProps = { rootKey: 'techDrive' | 'jenkinsBuild'; onSelectionChange: (paths: string[]) => void };
-type SelectMockProps = { value: string; onValueChange: (value: string) => void; children: ReactNode; disabled?: boolean };
+type SelectMockProps = {
+  value: string;
+  onValueChange: (value: string) => void;
+  children: ReactNode;
+  disabled?: boolean;
+  open?: boolean;
+};
 
 const streams: Stream[] = [];
 const api = vi.hoisted(() => ({
@@ -26,6 +32,12 @@ const api = vi.hoisted(() => ({
   techDriveHeaders: vi.fn((username: string) => ({ 'X-TechDrive-Username': username })),
   uatBuildOperationEventUrl: vi.fn((id: string) => `/api/uat-builds/operations/${encodeURIComponent(id)}`),
 }));
+
+type PageTutorialProps = {
+  onStart?: () => void;
+  onReset?: () => void;
+  onStepPrepare?: (index: number) => void | Promise<void>;
+};
 
 vi.mock('@/lib/contractApi', () => api);
 vi.mock('@/context/PortalContext', () => ({ usePortal: () => ({ username: 'jonty' }) }));
@@ -43,8 +55,13 @@ vi.mock('@/components/FileBrowser', () => ({
   ),
 }));
 vi.mock('@/components/ui/select', () => ({
-  Select: ({ value, onValueChange, children, disabled }: SelectMockProps) => (
-    <select value={value} disabled={disabled} onChange={(event) => onValueChange(event.target.value)}>
+  Select: ({ value, onValueChange, children, disabled, open }: SelectMockProps) => (
+    <select
+      value={value}
+      disabled={disabled}
+      data-open={open ? 'true' : 'false'}
+      onChange={(event) => onValueChange(event.target.value)}
+    >
       {children}
     </select>
   ),
@@ -52,6 +69,23 @@ vi.mock('@/components/ui/select', () => ({
   SelectItem: ({ value, children }: { value: string; children: ReactNode }) => <option value={value}>{children}</option>,
   SelectTrigger: () => null,
   SelectValue: () => null,
+}));
+vi.mock('@/components/PageTutorial', () => ({
+  default: ({ onStart, onReset, onStepPrepare }: PageTutorialProps) => (
+    <div>
+      <button type="button" onClick={onStart}>
+        Tutorial
+      </button>
+      {[0, 1, 2, 3, 4, 5, 6].map((step) => (
+        <button type="button" key={step} onClick={() => void onStepPrepare?.(step)}>
+          Tutorial step {step}
+        </button>
+      ))}
+      <button type="button" onClick={onReset}>
+        Reset tutorial
+      </button>
+    </div>
+  ),
 }));
 
 import { fetchEventSource } from '@microsoft/fetch-event-source';
@@ -126,7 +160,7 @@ describe('UatBuildPage', () => {
   async function selectDuplicateAndConvert(user: ReturnType<typeof userEvent.setup>) {
     await runPreflight(user);
     await user.selectOptions(screen.getByRole('combobox'), 'WEB-INF/web.xml');
-    await user.click(screen.getByRole('button', { name: 'Convert' }));
+    await user.click(screen.getByRole('button', { name: /^Convert/ }));
     await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
   }
 
@@ -162,11 +196,11 @@ describe('UatBuildPage', () => {
     expect(screen.getByText(/copied from UAT automatically/)).toBeVisible();
     expect(screen.getByText('application.properties → WEB-INF/classes/application.properties')).toBeVisible();
     expect(screen.getByText('Check generated configuration.')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Convert/ })).toBeDisabled();
 
     await user.selectOptions(screen.getByRole('combobox'), 'WEB-INF/web.xml');
-    expect(screen.getByRole('button', { name: 'Convert' })).toBeEnabled();
-    await user.click(screen.getByRole('button', { name: 'Convert' }));
+    expect(screen.getByRole('button', { name: /^Convert/ })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: /^Convert/ }));
 
     expect(api.convertUatBuild).toHaveBeenCalledWith({
       lockId: 'lock-1',
@@ -179,7 +213,7 @@ describe('UatBuildPage', () => {
     const user = userEvent.setup();
     await runPreflight(user);
     expect(screen.getByText('Missing required UAT files')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Convert' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Convert/ })).toBeDisabled();
   });
 
   it('uses one authenticated operation stream and completes directly from its payload', async () => {
@@ -255,5 +289,55 @@ describe('UatBuildPage', () => {
     expect(fetchEventSource).toHaveBeenCalledTimes(1);
     view.unmount();
     expect(streams[0].options.signal.aborted).toBe(true);
+  });
+
+  it('walks the tutorial with sample findings and restores state without calling conversion APIs', async () => {
+    const user = userEvent.setup();
+    render(<UatBuildPage />);
+    await screen.findByText('orders');
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial' }));
+    expect(document.querySelector('[data-tour="uat-application"]')).toBeTruthy();
+    expect(screen.getByRole('combobox')).toHaveAttribute('data-open', 'true');
+    expect(screen.getByRole('combobox')).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 1' }));
+    await waitFor(() => expect(screen.getByRole('combobox')).toHaveAttribute('data-open', 'false'));
+    expect(document.querySelector('[data-tour="uat-source"]')).toBeTruthy();
+    expect(screen.getByText('tutorial/example.war')).toBeVisible();
+    expect(screen.getByRole('checkbox')).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 2' }));
+    expect(document.querySelector('[data-tour="uat-jenkins"]')).toBeTruthy();
+    expect(screen.getByText('tutorial/exploded')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 3' }));
+    expect(document.querySelector('[data-tour="uat-inspect"]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Inspect and lock' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 4' }));
+    await waitFor(() => expect(screen.getByText('Present in UAT but missing from Jenkins')).toBeVisible());
+    expect(screen.getByText('WEB-INF/lib/uat-only.jar')).toBeVisible();
+    expect(screen.getByText('application.properties → WEB-INF/classes/application.properties')).toBeVisible();
+    expect(screen.getByText('Resolve duplicate: web.xml')).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Convert \(\d+\)$/ })).toBeDisabled();
+    expect(api.preflightUatBuild).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 5' }));
+    expect(document.querySelector('[data-tour="uat-convert"]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Convert \(\d+\)$/ })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Tutorial step 6' }));
+    await waitFor(() => expect(screen.getByText(/Scan the war from below location/)).toBeVisible());
+    expect(screen.getByText(/Hash: a{64}/)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Reset tutorial' }));
+    expect(screen.queryByText('Present in UAT but missing from Jenkins')).not.toBeInTheDocument();
+    expect(screen.queryByText('tutorial/example.war')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Inspect and lock' })).toBeDisabled();
+    expect(screen.getByRole('combobox')).toHaveAttribute('data-open', 'false');
+    expect(api.preflightUatBuild).not.toHaveBeenCalled();
+    expect(api.convertUatBuild).not.toHaveBeenCalled();
+    expect(api.releaseUatBuildLock).not.toHaveBeenCalled();
   });
 });

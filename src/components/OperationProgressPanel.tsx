@@ -142,7 +142,9 @@ export default function OperationProgressPanel() {
   const deploymentFailed = operationProgress?.deploymentOutcome === 'FAILED';
   const profilePowerOperation = isProfilePowerOperation(operationType);
   const lifecycleStatus =
-    profilePowerOperation || !live?.statusEvent ? undefined : lifecycleStatuses[live.statusEvent as keyof typeof lifecycleStatuses];
+    profilePowerOperation || !live?.statusEvent
+      ? undefined
+      : lifecycleStatuses[live.statusEvent as keyof typeof lifecycleStatuses];
   const progressValue =
     typeof operationProgress?.progressPercentage === 'number' && Number.isFinite(operationProgress.progressPercentage)
       ? operationProgress.progressPercentage
@@ -151,8 +153,7 @@ export default function OperationProgressPanel() {
     typeof record?.progressPercentage === 'number' && Number.isFinite(record.progressPercentage)
       ? record.progressPercentage
       : null;
-  const recordAdvancesProgress =
-    recordProgress !== null && (progressValue === null || recordProgress > progressValue);
+  const recordAdvancesProgress = recordProgress !== null && (progressValue === null || recordProgress > progressValue);
   const currentRecordStatus = recordAdvancesProgress ? record?.status : undefined;
   const rawStatus =
     lifecycleStatus ||
@@ -211,18 +212,17 @@ export default function OperationProgressPanel() {
     operationType !== 'JAR_ROLLBACK' &&
     (operationType === 'JAR_DEPLOY' || isJarDeploymentPhase(operationProgress?.phaseCode));
   const profileId = viewingOperation?.profileId || String(resourceKey).replace(/^WILDFLY_PROFILE:/, '');
-  const outputSource: OutputSource =
-    !viewingOperation?.outputRequested
-      ? 'none'
-      : resourceType === 'WILDFLY_PROFILE'
-        ? !profilePowerOperation && profileId
-            ? 'profile-log'
-            : 'none'
-        : resourceType === 'JAR' && operationId
-          ? live?.terminalAvailabilityConfirmed === true || viewingOperation?.terminalAvailabilityConfirmed === true
-            ? 'terminal'
-            : 'terminal-pending'
-          : 'none';
+  const outputSource: OutputSource = !viewingOperation?.outputRequested
+    ? 'none'
+    : resourceType === 'WILDFLY_PROFILE'
+      ? !profilePowerOperation && profileId
+        ? 'profile-log'
+        : 'none'
+      : resourceType === 'JAR' && operationId
+        ? live?.terminalAvailabilityConfirmed === true || viewingOperation?.terminalAvailabilityConfirmed === true
+          ? 'terminal'
+          : 'terminal-pending'
+        : 'none';
   const profileLogOutput = outputSource === 'profile-log';
   const terminalOutput = outputSource === 'terminal';
   const hasOutput = outputSource !== 'none';
@@ -253,7 +253,9 @@ export default function OperationProgressPanel() {
       : jarDeployment
         ? {
             ariaLabel: 'JAR deployment timeline',
-            steps: jarDeploymentTimeline(live?.frontendDeploymentRequested ?? viewingOperation?.frontendDeploymentRequested === true),
+            steps: jarDeploymentTimeline(
+              live?.frontendDeploymentRequested ?? viewingOperation?.frontendDeploymentRequested === true,
+            ),
             currentStepId: jarDeploymentPhase(operationProgress?.phaseCode)?.timelineId,
             phaseLabel: jarDeploymentPhaseLabel(operationProgress?.phaseCode),
           }

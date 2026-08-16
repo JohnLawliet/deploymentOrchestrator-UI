@@ -302,7 +302,9 @@ describe('FileBrowser selectableType', () => {
     await user.tab();
 
     expect(await screen.findByText('...renaming...')).toBeInTheDocument();
-    await waitFor(() => expect(renameFile).toHaveBeenCalledWith({ rootKey: 'techDrive', path: 'available.xml', newName: 'renamed.xml' }));
+    await waitFor(() =>
+      expect(renameFile).toHaveBeenCalledWith({ rootKey: 'techDrive', path: 'available.xml', newName: 'renamed.xml' }),
+    );
     completeRename();
     expect(await screen.findByTitle('Rename')).toHaveClass('text-blue-600');
     expect(screen.getByTestId('selected-paths')).toHaveTextContent('renamed.xml');

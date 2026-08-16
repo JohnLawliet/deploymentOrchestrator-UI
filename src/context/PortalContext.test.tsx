@@ -264,7 +264,12 @@ describe('frontend profile system events', () => {
   it('parses and idempotently applies a frontend association update by frontend UUID and JAR ID', () => {
     const frontend = frontendProfileActivity({ profileUuid: 'frontend-2', profileName: 'payments-ui', jarProfileUuid: 'jar-2' });
     const nestedFrontend = frontendProfileActivity({ ...frontend, profileName: 'nested-payments-ui' });
-    const jar = jarProfileActivity({ id: 'jar-2', applicationName: 'payments', frontendProfileUuid: 'frontend-2', frontendProfile: nestedFrontend });
+    const jar = jarProfileActivity({
+      id: 'jar-2',
+      applicationName: 'payments',
+      frontendProfileUuid: 'frontend-2',
+      frontendProfile: nestedFrontend,
+    });
     const event = parseSseEvent({
       id: '',
       event: 'FRONTEND_ASSOCIATION_UPDATED',
@@ -502,9 +507,7 @@ describe('frontend profile system events', () => {
       resourceKey: 'JAR:orders',
       status: 'STARTING',
     });
-    expect(
-      reconcileViewingOperationWithSnapshot(jarOp, new Set(), new Set(), { 'jar-deploy-1': jarOp }),
-    ).toBeNull();
+    expect(reconcileViewingOperationWithSnapshot(jarOp, new Set(), new Set(), { 'jar-deploy-1': jarOp })).toBeNull();
   });
 
   it.each(['FRONTEND_PROFILE_UNRESOLVED', 'FRONTEND_INACTIVE', 'FRONTEND_CONFIGURATION_INVALID'] as const)(

@@ -382,7 +382,7 @@ export default function FileBrowser({
                   {isDirectory ? (
                     <Folder className="w-4 h-4 text-amber-600 shrink-0" />
                   ) : (
-                  <File className="w-4 h-4 text-blue-600 shrink-0" />
+                    <File className="w-4 h-4 text-blue-600 shrink-0" />
                   )}
                   <InlineRename
                     name={entry.name}

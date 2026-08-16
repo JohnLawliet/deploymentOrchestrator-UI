@@ -331,16 +331,16 @@ export default function PortalDashboardPage() {
     : null;
   const tutorialRollbackAvailable = Boolean(
     activeTutorialProfile &&
-      tutorialActivity &&
-      submitting !== `WILDFLY_PROFILE:${activeTutorialProfile.id}` &&
-      !busyStates.has(tutorialActivity.status ?? '') &&
-      !tutorialProfileLock &&
-      !Object.values(operations).some(
-        (operation) =>
-          operation.operationType === 'WAR_ROLLBACK' &&
-          operation.resourceKey === `WILDFLY_PROFILE:${activeTutorialProfile.id}` &&
-          !isOperationTerminal(operation),
-      ),
+    tutorialActivity &&
+    submitting !== `WILDFLY_PROFILE:${activeTutorialProfile.id}` &&
+    !busyStates.has(tutorialActivity.status ?? '') &&
+    !tutorialProfileLock &&
+    !Object.values(operations).some(
+      (operation) =>
+        operation.operationType === 'WAR_ROLLBACK' &&
+        operation.resourceKey === `WILDFLY_PROFILE:${activeTutorialProfile.id}` &&
+        !isOperationTerminal(operation),
+    ),
   );
   const dashboardTutorialSteps = useMemo<TutorialStep[]>(() => {
     const jarStep: TutorialStep = {
@@ -348,8 +348,7 @@ export default function PortalDashboardPage() {
       title: 'Understand JAR applications',
       instruction:
         'A JAR can run alone or with a frontend. The example combines the JAR’s runtime/readiness information with its associated frontend details.',
-      why:
-        'View output needs a retained attachable terminal. JAR snapshots are created only after an eligible non-first deployment, then listed newest-first.',
+      why: 'View output needs a retained attachable terminal. JAR snapshots are created only after an eligible non-first deployment, then listed newest-first.',
       placement: 'top',
       before: async () => {
         setTutorialJarDemo(true);
@@ -362,7 +361,11 @@ export default function PortalDashboardPage() {
       return [
         {
           target: loading || error ? '[data-tour="dashboard-refresh"]' : '[data-tour="dashboard-wildfly"]',
-          title: loading ? 'Waiting for profile inventory' : error ? 'Profile inventory could not load' : 'No usable WildFly profiles found',
+          title: loading
+            ? 'Waiting for profile inventory'
+            : error
+              ? 'Profile inventory could not load'
+              : 'No usable WildFly profiles found',
           instruction: loading
             ? 'Wait for the inventory, then restart the tutorial.'
             : error
@@ -380,8 +383,7 @@ export default function PortalDashboardPage() {
       title: 'Inspect the critical profile details',
       instruction:
         'PID identifies the managed WildFly process; Application is the deployed WAR. Port offset comes from the launcher, while Consecutive failures tracks deployment failures and Latest result records the backend outcome.',
-      why:
-        'A successful deployment resets consecutive failures. Latest result is not changed merely because the terminal window closes.',
+      why: 'A successful deployment resets consecutive failures. Latest result is not changed merely because the terminal window closes.',
     };
     const rollbackStep: TutorialStep = tutorialRollbackAvailable
       ? {
@@ -429,8 +431,7 @@ export default function PortalDashboardPage() {
         title: 'Read runtime and health badges',
         instruction:
           'Runtime can be STARTING, DEPLOYING, STOPPING, ACTIVE, INACTIVE, or FAILED. Health can be FUNCTIONAL, NOT_FUNCTIONAL, or MISSING.',
-        why:
-          'ACTIVE requires a PID plus reachable application and management ports. NOT_FUNCTIONAL means invalid paths or three failed deployments; MISSING has no usable launcher.',
+        why: 'ACTIVE requires a PID plus reachable application and management ports. NOT_FUNCTIONAL means invalid paths or three failed deployments; MISSING has no usable launcher.',
         before: async () => {
           setTutorialSearchOpen(false);
           selectProfile(profile);
@@ -442,7 +443,8 @@ export default function PortalDashboardPage() {
       {
         target: '[data-tour="dashboard-tutorial-view-output"]',
         title: 'Open server output when available',
-        instruction: 'View output is enabled only when this profile has a readable server.log file; otherwise the button remains disabled.',
+        instruction:
+          'View output is enabled only when this profile has a readable server.log file; otherwise the button remains disabled.',
         why: 'The required file is <profileDir>/log/server.log, so the page never opens output for a missing or unreadable log.',
       },
       rollbackStep,
@@ -454,7 +456,9 @@ export default function PortalDashboardPage() {
     <Page
       title="Dashboard"
       description="Live QC resource inventory and restart controls."
-      headerAction={<PageTutorial steps={dashboardTutorialSteps} onStart={startDashboardTutorial} onReset={resetDashboardTutorial} />}
+      headerAction={
+        <PageTutorial steps={dashboardTutorialSteps} onStart={startDashboardTutorial} onReset={resetDashboardTutorial} />
+      }
     >
       <div className="flex justify-end mb-4" data-tour="dashboard-refresh">
         <Button variant="outline" size="sm" className="gap-2" onClick={() => setRefresh((v) => v + 1)}>
@@ -527,16 +531,12 @@ export default function PortalDashboardPage() {
                       subtitle={activity.version || profile.version}
                       lastDeployedUser={profile.lastDeployedUser}
                       wildfly
-                      tutorialExpanded={
-                        tutorialActive && tutorialExpandedProfileId === profile.id ? true : undefined
-                      }
+                      tutorialExpanded={tutorialActive && tutorialExpandedProfileId === profile.id ? true : undefined}
                       tourTarget={
                         tutorialActive && tutorialProfile?.id === profile.id ? 'dashboard-tutorial-profile-card' : undefined
                       }
                       detailsTourTarget={
-                        tutorialActive && tutorialProfile?.id === profile.id
-                          ? 'dashboard-tutorial-profile-details'
-                          : undefined
+                        tutorialActive && tutorialProfile?.id === profile.id ? 'dashboard-tutorial-profile-details' : undefined
                       }
                     >
                       <div className="flex w-full flex-wrap gap-2" data-testid={`profile-actions-primary-${profile.id}`}>
@@ -547,9 +547,7 @@ export default function PortalDashboardPage() {
                           className="gap-2"
                           disabled={!activity.serverLogAvailable}
                           data-tour={
-                            tutorialActive && tutorialProfile?.id === profile.id
-                              ? 'dashboard-tutorial-view-output'
-                              : undefined
+                            tutorialActive && tutorialProfile?.id === profile.id ? 'dashboard-tutorial-view-output' : undefined
                           }
                           onClick={() => viewOutput(activity, `Profile · ${profile.name}`)}
                         >

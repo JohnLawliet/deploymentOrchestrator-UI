@@ -33,6 +33,43 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecti
 type ConversionState = RequestState | 'starting' | 'running' | 'completed' | 'failed';
 type RootsByKey = Partial<Record<FileRoot['key'], FileRoot>>;
 const storageKeyFor = (username: string) => `uat-build-operation:${username}`;
+const TUTORIAL_LOCK_ID = 'tutorial-uat-lock';
+const tutorialSampleWar = 'tutorial/example.war';
+const tutorialSampleJenkins = 'tutorial/exploded';
+const tutorialPreflight = (): UatPreflightResponse => ({
+  lockId: TUTORIAL_LOCK_ID,
+  lockExpiresAt: new Date(Date.now() + 60000).toISOString(),
+  lockTtlSeconds: 60,
+  ready: false,
+  decisionRequired: true,
+  warnings: [],
+  missingFromJenkinsFiles: ['WEB-INF/lib/uat-only.jar'],
+  missingUatFiles: [],
+  duplicateFiles: { 'web.xml': ['WEB-INF/web.xml', 'legacy/web.xml'] },
+  automaticallyResolved: { 'application.properties': 'WEB-INF/classes/application.properties' },
+});
+const tutorialResult: UatOperationResponse = {
+  operationId: 'tutorial-operation',
+  status: 'COMPLETED',
+  outputPath: 'tutorial/example.war',
+  warFileName: 'example.war',
+  sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+};
+
+type UatTutorialSnapshot = {
+  activeStep: number;
+  application: string;
+  source: string[];
+  jenkinsDirectory: string[];
+  additionalConfigRequired: boolean;
+  preflight: UatPreflightResponse | null;
+  duplicateSelections: Record<string, string>;
+  lockId: string;
+  conversionState: ConversionState;
+  result: UatOperationResponse | null;
+  notice: string;
+  error: string;
+};
 const rootLabel = (root: FileRoot | string | null | undefined) =>
   typeof root === 'string' ? root : root?.path || 'Configured backend root';
 const list = <T,>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -88,9 +125,12 @@ export default function UatBuildPage() {
   const [streamWarning, setStreamWarning] = useState('');
   const [copyState, setCopyState] = useState('idle');
   const [streamRevision, setStreamRevision] = useState(0);
+  const [tutorialActive, setTutorialActive] = useState(false);
+  const [tutorialApplicationOpen, setTutorialApplicationOpen] = useState(false);
   const lockRef = useRef('');
   const operationRef = useRef('');
   const conversionAcceptedRef = useRef(false);
+  const tutorialSnapshotRef = useRef<UatTutorialSnapshot | null>(null);
 
   useEffect(() => {
     lockRef.current = lockId;
@@ -137,7 +177,8 @@ export default function UatBuildPage() {
 
   useEffect(
     () => () => {
-      if (lockRef.current && !conversionAcceptedRef.current) releaseUatBuildLock(lockRef.current).catch(() => {});
+      if (lockRef.current && lockRef.current !== TUTORIAL_LOCK_ID && !conversionAcceptedRef.current)
+        releaseUatBuildLock(lockRef.current).catch(() => {});
     },
     [],
   );
@@ -152,14 +193,14 @@ export default function UatBuildPage() {
   }, [conversionState, lockId, lockTime]);
 
   useEffect(() => {
-    if (!lockId || !lockTime || lockTime > now || conversionState === 'running') return;
+    if (tutorialActive || !lockId || !lockTime || lockTime > now || conversionState === 'running') return;
     lockRef.current = '';
     setLockId('');
     setPreflight(null);
     setDuplicateSelections({});
     setActiveStep(1);
     setNotice('The write lock expired. Review the inputs and request a new lock.');
-  }, [conversionState, lockId, lockTime, now]);
+  }, [conversionState, lockId, lockTime, now, tutorialActive]);
 
   const clearStoredOperation = useCallback(() => {
     if (username) sessionStorage.removeItem(storageKeyFor(username));
@@ -284,19 +325,98 @@ export default function UatBuildPage() {
     setActiveStep(1);
     setNotice(message);
     setError('');
-    if (currentLock && !conversionAcceptedRef.current)
+    if (currentLock && currentLock !== TUTORIAL_LOCK_ID && !conversionAcceptedRef.current)
       releaseUatBuildLock(currentLock).catch((reason) =>
         setNotice(`Inputs were reset, but the lock could not be released: ${reason.message}`),
       );
   }, []);
 
   const changeInput = <T,>(setter: (value: T) => void, value: T) => {
-    if (lockRef.current || result) releaseAndReset('Inputs changed. Request a new write lock to continue.');
+    if (!tutorialActive && (lockRef.current || result)) releaseAndReset('Inputs changed. Request a new write lock to continue.');
     setter(value);
   };
 
+  const startTutorial = useCallback(() => {
+    tutorialSnapshotRef.current = {
+      activeStep,
+      application,
+      source,
+      jenkinsDirectory,
+      additionalConfigRequired,
+      preflight,
+      duplicateSelections,
+      lockId,
+      conversionState,
+      result,
+      notice,
+      error,
+    };
+    setTutorialActive(true);
+    setTutorialApplicationOpen(true);
+    setActiveStep(1);
+  }, [
+    activeStep,
+    additionalConfigRequired,
+    application,
+    conversionState,
+    duplicateSelections,
+    error,
+    jenkinsDirectory,
+    lockId,
+    notice,
+    preflight,
+    result,
+    source,
+  ]);
+
+  const showTutorialStep = useCallback((step: number) => {
+    setTutorialApplicationOpen(step === 0);
+    if (step <= 3) setActiveStep(1);
+    if (step >= 1) setSource((current) => (current[0] ? current : [tutorialSampleWar]));
+    if (step >= 2) setJenkinsDirectory((current) => (current[0] ? current : [tutorialSampleJenkins]));
+    if (step === 4 || step === 5) {
+      const sample = tutorialPreflight();
+      setActiveStep(2);
+      setPreflight(sample);
+      setPreflightState('ready');
+      setDuplicateSelections({});
+      setLockId(sample.lockId);
+      lockRef.current = sample.lockId;
+      setNow(Date.now());
+      setResult(null);
+      setConversionState('idle');
+    }
+    if (step === 6) {
+      setActiveStep(3);
+      setResult(tutorialResult);
+      setConversionState('completed');
+    }
+    return new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  }, []);
+
+  const resetTutorial = useCallback(() => {
+    const snapshot = tutorialSnapshotRef.current;
+    tutorialSnapshotRef.current = null;
+    setTutorialActive(false);
+    setTutorialApplicationOpen(false);
+    if (!snapshot) return;
+    lockRef.current = snapshot.lockId;
+    setActiveStep(snapshot.activeStep);
+    setApplication(snapshot.application);
+    setSource(snapshot.source);
+    setJenkinsDirectory(snapshot.jenkinsDirectory);
+    setAdditionalConfigRequired(snapshot.additionalConfigRequired);
+    setPreflight(snapshot.preflight);
+    setDuplicateSelections(snapshot.duplicateSelections);
+    setLockId(snapshot.lockId);
+    setConversionState(snapshot.conversionState);
+    setResult(snapshot.result);
+    setNotice(snapshot.notice);
+    setError(snapshot.error);
+  }, []);
+
   const runPreflight = async () => {
-    if (!application || !source[0] || !jenkinsDirectory[0] || preflightState === 'loading') return;
+    if (tutorialActive || !application || !source[0] || !jenkinsDirectory[0] || preflightState === 'loading') return;
     setPreflightState('loading');
     setError('');
     setNotice('');
@@ -332,7 +452,15 @@ export default function UatBuildPage() {
   const missingUatFiles = list(preflight?.missingUatFiles);
 
   const convert = async () => {
-    if (!lockId || missingUatFiles.length || !duplicatesComplete || ['starting', 'running'].includes(conversionState)) return;
+    if (
+      tutorialActive ||
+      !lockId ||
+      lockId === TUTORIAL_LOCK_ID ||
+      missingUatFiles.length ||
+      !duplicatesComplete ||
+      ['starting', 'running'].includes(conversionState)
+    )
+      return;
     setConversionState('starting');
     setError('');
     setStreamWarning('');
@@ -373,15 +501,42 @@ export default function UatBuildPage() {
 
   const uatLock = findConflictingLock?.({ section: 'UAT', profile: jenkinsDirectory[0], mode: 'WRITE' });
   const canPreflight =
-    application && source[0] && jenkinsDirectory[0] && preflightState !== 'loading' && !operationId && !uatLock;
+    !tutorialActive &&
+    application &&
+    source[0] &&
+    jenkinsDirectory[0] &&
+    preflightState !== 'loading' &&
+    !operationId &&
+    !uatLock;
   const canConvert =
-    !!lockId && !missingUatFiles.length && duplicatesComplete && !['starting', 'running'].includes(conversionState);
+    !tutorialActive &&
+    !!lockId &&
+    lockId !== TUTORIAL_LOCK_ID &&
+    !missingUatFiles.length &&
+    duplicatesComplete &&
+    !['starting', 'running'].includes(conversionState);
+  const convertLabel =
+    conversionState === 'running'
+      ? 'Creating UAT build…'
+      : conversionState === 'starting'
+        ? 'Starting…'
+        : lockId && remainingSeconds
+          ? `Convert (${remainingSeconds})`
+          : 'Convert';
 
   return (
     <Page
       title="Create UAT build"
       description="Combine UAT configuration with a Jenkins exploded WAR, package the result, and generate its SHA-256 hash."
-      headerAction={<PageTutorial steps={uatBuildTutorialSteps} />}
+      headerAction={
+        <PageTutorial
+          steps={uatBuildTutorialSteps}
+          disabled={!!operationId}
+          onStart={startTutorial}
+          onStepPrepare={showTutorialStep}
+          onReset={resetTutorial}
+        />
+      }
     >
       <div className="space-y-4">
         {notice && <Notice tone="warning">{notice}</Notice>}
@@ -391,7 +546,6 @@ export default function UatBuildPage() {
         <StepCard
           number={1}
           title="Select build inputs"
-          tour="uat-inputs"
           active={activeStep === 1}
           available={!operationId}
           onOpen={() => setActiveStep(1)}
@@ -402,11 +556,17 @@ export default function UatBuildPage() {
           }
         >
           <div className="space-y-5">
-            <FormItem>
+            <FormItem data-tour="uat-application">
               <FormLabel>Application</FormLabel>
               <Select
                 value={application}
-                onValueChange={(value) => changeInput(setApplication, value)}
+                open={tutorialActive ? tutorialApplicationOpen : undefined}
+                onOpenChange={(open) => {
+                  if (tutorialActive) setTutorialApplicationOpen(open);
+                }}
+                onValueChange={(value) => {
+                  if (!tutorialActive) changeInput(setApplication, value);
+                }}
                 disabled={applicationState === 'loading'}
               >
                 <SelectTrigger>
@@ -422,56 +582,61 @@ export default function UatBuildPage() {
               </Select>
             </FormItem>
             <div className="grid gap-5 xl:grid-cols-2">
-              <BrowserPanel
-                title="UAT WAR from Tech Drive"
-                description={roots?.techDrive ? `Root: ${rootLabel(roots.techDrive)}` : 'Select one .war file.'}
-              >
-                <FileBrowser
-                  rootKey="techDrive"
-                  selectableType="file"
-                  selectableExtension=".war"
-                  selected={source}
-                  onSelectionChange={(items) => changeInput(setSource, items.slice(-1))}
-                />
-                {source[0] && (
-                  <FormDescription>
-                    Selected: <span className="font-mono text-foreground">{source[0]}</span>
-                  </FormDescription>
-                )}
-              </BrowserPanel>
-              <BrowserPanel
-                title="Jenkins exploded WAR"
-                description={roots?.jenkinsBuild ? `Root: ${rootLabel(roots.jenkinsBuild)}` : 'Select one directory.'}
-              >
-                <FileBrowser
-                  rootKey="jenkinsBuild"
-                  selectableType="directory"
-                  selected={jenkinsDirectory}
-                  onSelectionChange={(items) => changeInput(setJenkinsDirectory, items.slice(-1))}
-                />
-                {jenkinsDirectory[0] && (
-                  <FormDescription>
-                    Selected: <span className="font-mono text-foreground">{jenkinsDirectory[0]}</span>
-                  </FormDescription>
-                )}
-              </BrowserPanel>
+              <div data-tour="uat-source" className="space-y-3">
+                <BrowserPanel
+                  title="UAT WAR from Tech Drive"
+                  description={roots?.techDrive ? `Root: ${rootLabel(roots.techDrive)}` : 'Select one .war file.'}
+                >
+                  <FileBrowser
+                    rootKey="techDrive"
+                    selectableType="file"
+                    selectableExtension=".war"
+                    selected={source}
+                    onSelectionChange={(items) => changeInput(setSource, items.slice(-1))}
+                  />
+                  {source[0] && (
+                    <FormDescription>
+                      Selected: <span className="font-mono text-foreground">{source[0]}</span>
+                    </FormDescription>
+                  )}
+                </BrowserPanel>
+                <Label
+                  className={`flex items-start gap-3 rounded-md border p-3 ${additionalConfigRequired ? 'border-primary bg-primary/10' : ''}`}
+                >
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={additionalConfigRequired}
+                    disabled={tutorialActive}
+                    onCheckedChange={(checked) => changeInput(setAdditionalConfigRequired, checked === true)}
+                  />
+                  <span>
+                    <strong>Apply additional WAR configuration</strong>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked
+                      when no additional changes are needed.
+                    </span>
+                  </span>
+                </Label>
+              </div>
+              <div data-tour="uat-jenkins">
+                <BrowserPanel
+                  title="Jenkins exploded WAR"
+                  description={roots?.jenkinsBuild ? `Root: ${rootLabel(roots.jenkinsBuild)}` : 'Select one directory.'}
+                >
+                  <FileBrowser
+                    rootKey="jenkinsBuild"
+                    selectableType="directory"
+                    selected={jenkinsDirectory}
+                    onSelectionChange={(items) => changeInput(setJenkinsDirectory, items.slice(-1))}
+                  />
+                  {jenkinsDirectory[0] && (
+                    <FormDescription>
+                      Selected: <span className="font-mono text-foreground">{jenkinsDirectory[0]}</span>
+                    </FormDescription>
+                  )}
+                </BrowserPanel>
+              </div>
             </div>
-            <Label
-              className={`flex items-start gap-3 rounded-md border p-3 ${additionalConfigRequired ? 'border-primary bg-primary/10' : ''}`}
-            >
-              <Checkbox
-                className="mt-0.5"
-                checked={additionalConfigRequired}
-                onCheckedChange={(checked) => changeInput(setAdditionalConfigRequired, checked === true)}
-              />
-              <span>
-                <strong>Apply additional WAR configuration</strong>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked when
-                  no additional changes are needed.
-                </span>
-              </span>
-            </Label>
             <div className="flex items-center justify-between gap-4">
               <p className="text-xs text-muted-foreground">
                 The backend will exclusively lock both selected paths for the returned duration.
@@ -589,7 +754,7 @@ export default function UatBuildPage() {
                 ) : (
                   <FolderArchive className="h-4 w-4" />
                 )}
-                {conversionState === 'running' ? 'Creating UAT build…' : conversionState === 'starting' ? 'Starting…' : 'Convert'}
+                {convertLabel}
               </Button>
             </div>
           </div>

@@ -24,7 +24,9 @@ describe('SystemToastQueue', () => {
     ];
     render(<SystemToastQueue />);
 
-    expect(screen.getByText('Runtime reconciliation found issues.').closest('[role="status"]')).toHaveClass('border-amber-500/40');
+    expect(screen.getByText('Runtime reconciliation found issues.').closest('[role="status"]')).toHaveClass(
+      'border-amber-500/40',
+    );
     expect(screen.getByText('Runtime reconciliation recovered.').closest('[role="status"]')).toHaveClass('border-green-500/40');
     expect(screen.getByText('Runtime reconciliation found issues.').closest('[aria-live="polite"]')).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss system notification' })[0]);

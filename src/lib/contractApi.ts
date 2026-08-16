@@ -90,8 +90,7 @@ const looksLikeHtml = (value: unknown): boolean => {
 export function isBackendUnavailable(error: unknown): boolean {
   const axiosError = axios.isAxiosError(error) ? error : undefined;
   const response = axiosError?.response;
-  const status =
-    response?.status ?? (isRecord(error) && typeof error.status === 'number' ? error.status : undefined);
+  const status = response?.status ?? (isRecord(error) && typeof error.status === 'number' ? error.status : undefined);
   const body = response?.data ?? (isRecord(error) ? error.details : undefined);
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   if (isApiError(body)) return false;
@@ -134,9 +133,7 @@ function normalizedError(
         ? error.message
         : fallback;
   const message =
-    isBackendUnavailable(error) || looksLikeHtml(payload) || looksLikeHtml(rawMessage)
-      ? BACKEND_OFFLINE_MESSAGE
-      : rawMessage;
+    isBackendUnavailable(error) || looksLikeHtml(payload) || looksLikeHtml(rawMessage) ? BACKEND_OFFLINE_MESSAGE : rawMessage;
   const result = new Error(message || fallback) as ApiRequestError;
   result.status = response?.status;
   result.code = isApiError(payload) ? payload.code : undefined;

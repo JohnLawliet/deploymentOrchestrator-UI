@@ -183,7 +183,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isNullableString = (value: unknown): value is string | null => value == null || typeof value === 'string';
 const isNullableNumber = (value: unknown): value is number | null => value == null || typeof value === 'number';
 const isFrontendProfileActivity = (value: unknown): value is FrontendProfileActivity =>
-  isRecord(value) && typeof value.profileUuid === 'string' && typeof value.profileName === 'string' && typeof value.port === 'number';
+  isRecord(value) &&
+  typeof value.profileUuid === 'string' &&
+  typeof value.profileName === 'string' &&
+  typeof value.port === 'number';
 const isJarProfileActivity = (value: unknown): value is JarProfileActivity =>
   isRecord(value) &&
   typeof value.id === 'string' &&
@@ -330,7 +333,9 @@ export function applyFrontendAssociationUpdate(current: ActivityMaps, event: Fro
     frontendProfileActivityMap: frontendChanged
       ? { ...current.frontendProfileActivityMap, [frontendProfile.profileUuid]: frontendProfile }
       : current.frontendProfileActivityMap,
-    jarProfileActivityMap: jarChanged ? { ...current.jarProfileActivityMap, [jarProfile.id]: jarActivity } : current.jarProfileActivityMap,
+    jarProfileActivityMap: jarChanged
+      ? { ...current.jarProfileActivityMap, [jarProfile.id]: jarActivity }
+      : current.jarProfileActivityMap,
   };
 }
 
@@ -653,32 +658,35 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     showSystemToast(BACKEND_OFFLINE_TOAST, 'warning');
   }, [changeUser, showSystemToast]);
 
-  const acceptUser = useCallback(async (candidate: string): Promise<boolean> => {
-    const entered = candidate.trim();
-    if (!entered) {
-      setValidationError('Enter your username.');
-      return false;
-    }
-    setValidationState('validating');
-    setValidationError('');
-    try {
-      const response = await validateUser(entered);
-      for (const notice of response.notices ?? []) {
-        showSystemToast(notice, 'warning');
+  const acceptUser = useCallback(
+    async (candidate: string): Promise<boolean> => {
+      const entered = candidate.trim();
+      if (!entered) {
+        setValidationError('Enter your username.');
+        return false;
       }
-      sessionStorage.setItem(PORTAL_USERNAME_SESSION_KEY, entered);
-      setUsername(entered);
-      setValidated(true);
-      setValidationState('valid');
-      return true;
-    } catch (error) {
-      sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
-      setValidated(false);
-      setValidationState('invalid');
-      setValidationError(errorMessage(error, 'Unable to validate username.'));
-      return false;
-    }
-  }, [showSystemToast]);
+      setValidationState('validating');
+      setValidationError('');
+      try {
+        const response = await validateUser(entered);
+        for (const notice of response.notices ?? []) {
+          showSystemToast(notice, 'warning');
+        }
+        sessionStorage.setItem(PORTAL_USERNAME_SESSION_KEY, entered);
+        setUsername(entered);
+        setValidated(true);
+        setValidationState('valid');
+        return true;
+      } catch (error) {
+        sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
+        setValidated(false);
+        setValidationState('invalid');
+        setValidationError(errorMessage(error, 'Unable to validate username.'));
+        return false;
+      }
+    },
+    [showSystemToast],
+  );
 
   useEffect(() => {
     if (username && !validated) acceptUser(username);
