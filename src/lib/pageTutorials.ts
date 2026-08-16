@@ -2,36 +2,52 @@ import type { TutorialStep } from '@/components/PageTutorial';
 
 export const warTutorialSteps: TutorialStep[] = [
   {
-    target: '[data-tour="war-target"]',
-    title: 'Choose the deployment target',
-    instruction: 'Select the application, WildFly version, and profile that should receive the WAR.',
-    why: 'These values identify the exact server profile to reserve and deploy to.',
-  },
-  {
-    target: '[data-tour="war-source"]',
-    title: 'Select one WAR from Tech Drive',
+    target: '[data-tour="war-application"]',
+    title: 'Select an application',
     instruction:
-      'Browse Tech Drive and select the single .war file to deploy. Enable additional WAR configuration only when the package has the required companion configuration.',
-    why: 'The backend deploys the selected relative path and validates optional configuration before changing the profile.',
+      'Choose an application. Based on this selection, files to replace or delete are selected to modify the incoming WAR.',
+    why: 'The application identifies the WAR deployment you are preparing.',
   },
   {
-    target: '[data-tour="war-preflight"]',
+    target: '[data-tour="war-version-profile"]',
+    title: 'Choose the WildFly version and profile',
+    instruction:
+      'Select the profile where the WAR should be deployed. WildFly version must also be selected because execution depends on the WildFly instance on which the profile runs.',
+    why: 'The selected version limits the available profiles to the correct WildFly server.',
+  },
+  {
+    target: '[data-tour="war-datasource"]',
+    title: 'Review the profile datasource',
+    instruction:
+      "This is data from the profile's standalone.xml. It shows the current configuration: JNDI name, datasource URL, username, and password.",
+    why: 'Any edits are applied only as part of this WAR deployment.',
+  },
+  {
+    target: '[data-tour="war-source-config"]',
+    title: 'Choose the WAR and additional configuration',
+    instruction:
+      'This is your Tech Drive folder. Select the WAR file to deploy and check Apply additional WAR configuration. Adding properties, filters, or servlets does not break an existing QC profile after web.xml or .properties files are replaced. To modify an existing property, filter, or servlet, place a correctly formatted additionalConfig.toml in the same directory as the WAR.',
+    why: 'The selected Tech Drive path tells the backend which WAR to validate and deploy.',
+  },
+  {
+    target: '[data-tour="war-preflight-toggle"]',
     title: 'Run preflight and reserve the profile',
-    instruction: 'Check Run preflight and reserve profile after all required inputs are selected.',
-    why: 'Preflight verifies inputs and obtains an exclusive, time-limited profile reservation so another deployment cannot conflict.',
+    instruction:
+      'This puts write locks on the source and target profile after validating that the profile is still usable. It also checks for files with the same name in different profile paths. Checking this box starts a timer within which duplicate files must be resolved and the WAR deployed.',
+    why: 'The reservation prevents competing deployments while you review file conflicts.',
   },
   {
-    target: '[data-tour="war-preflight"]',
-    title: 'Resolve returned decisions',
+    target: '[data-tour="war-conflict-resolution"]',
+    title: 'Resolve duplicate file paths',
     instruction:
-      'Review warnings and missing files. When duplicate paths are returned, choose the exact candidate for every duplicate.',
-    why: 'The deployment cannot safely continue until every ambiguous file target has one explicit choice.',
+      'Select the file with the correct path for each duplicate. Paths listed in duplicate-file-defaults.properties for common conflicts such as web.xml are already resolved by default.',
+    why: 'An explicit selection prevents the deployment from replacing the wrong matching file.',
   },
   {
     target: '[data-tour="war-deploy"]',
-    title: 'Deploy before the reservation expires',
-    instruction: 'When all checks pass, select Deploy WAR and monitor the operation from the application.',
-    why: 'The reservation expires automatically; a fresh preflight is required if it runs out.',
+    title: 'Deploy before the timer expires',
+    instruction: 'Resolve the path conflicts and click Deploy WAR before the timer expires.',
+    why: 'When the reservation expires, run preflight again before deploying.',
   },
 ];
 
@@ -82,7 +98,8 @@ export const jarTutorialSteps: TutorialStep[] = [
   {
     target: '[data-tour="jar-launcher-no"]',
     title: 'Reuse an existing launcher',
-    instruction: 'Select No, reuse existing launcher when this application was deployed before and its saved .bat launcher should be used again.',
+    instruction:
+      'Select No, reuse existing launcher when this application was deployed before and its saved .bat launcher should be used again.',
     why: 'This is not a backend default. It requires an existing catalogued JAR with an accessible saved launcher and port; a health URL remains optional deployment configuration.',
   },
   {
@@ -101,7 +118,8 @@ export const jarTutorialSteps: TutorialStep[] = [
   {
     target: '[data-tour="jar-frontend-profile"]',
     title: 'Select a frontend profile',
-    instruction: 'Search and select the frontend profile that should receive the build. The tour selects the first available profile only as a temporary demonstration.',
+    instruction:
+      'Search and select the frontend profile that should receive the build. The tour selects the first available profile only as a temporary demonstration.',
     why: 'The list is populated from the backend’s latest frontend-profile system snapshot, so the selected profile supplies its deployment details.',
   },
   {
@@ -114,7 +132,8 @@ export const jarTutorialSteps: TutorialStep[] = [
   {
     target: '[data-tour="jar-frontend-sources"]',
     title: 'Select the frontend production build',
-    instruction: 'Choose the Tech Drive files and folders to copy to the selected profile. Selecting a folder includes its contained build assets.',
+    instruction:
+      'Choose the Tech Drive files and folders to copy to the selected profile. Selecting a folder includes its contained build assets.',
     why: 'The selected paths tell the backend exactly which production files to copy into the profile DocumentRoot.',
   },
   {
@@ -170,13 +189,15 @@ export const uploadTutorialSteps: TutorialStep[] = [
   {
     target: '[data-tour="upload-hotfix-type"]',
     title: 'Choose the hotfix type',
-    instruction: 'Choose Frontend XAMPP for a frontend profile, or WAR profile when the hotfix belongs in an exploded WAR deployment.',
+    instruction:
+      'Choose Frontend XAMPP for a frontend profile, or WAR profile when the hotfix belongs in an exploded WAR deployment.',
     why: 'The hotfix type determines the destination profile list and the validation that runs before deployment.',
   },
   {
     target: '[data-tour="upload-frontend-profile"]',
     title: 'Select the Frontend XAMPP profile',
-    instruction: 'Search and select the frontend profile that should receive the production build. The tutorial temporarily selects the first available profile as an example.',
+    instruction:
+      'Search and select the frontend profile that should receive the production build. The tutorial temporarily selects the first available profile as an example.',
     why: 'The list comes from the latest SYSTEM_SNAPSHOT. The selected profile supplies its configured document-root path to the backend.',
   },
   {
@@ -189,7 +210,8 @@ export const uploadTutorialSteps: TutorialStep[] = [
   {
     target: '[data-tour="upload-wildfly-profile"]',
     title: 'Select the WildFly profile',
-    instruction: 'Search and select the first matching profile for this hotfix. The tutorial selects the first available profile only as a temporary example.',
+    instruction:
+      'Search and select the first matching profile for this hotfix. The tutorial selects the first available profile only as a temporary example.',
     why: 'The scanned profile list identifies the one exploded-WAR profile in which the backend searches for matching destination files.',
   },
   {

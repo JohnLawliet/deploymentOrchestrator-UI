@@ -26,7 +26,7 @@ import { Notice, Page } from '@/components/PagePrimitives';
 import type { AsyncState } from '@/types/frontend';
 import { errorMessage } from '@/types/frontend';
 import { warTutorialSteps } from '@/lib/pageTutorials';
-import type { RootKey, SystemEvent, WarDeploymentRequest, WildFlyDatasource } from '@/types/api-contracts';
+import type { RootKey, SystemEvent, WarDeploymentRequest, WarPreflightResponse, WildFlyDatasource } from '@/types/api-contracts';
 
 const normalizeDatasource = (value: WildFlyDatasource | null | undefined): WildFlyDatasource | null =>
   value
@@ -41,6 +41,17 @@ const normalizeDatasource = (value: WildFlyDatasource | null | undefined): WildF
     : null;
 const sameDatasource = (left: WildFlyDatasource | null, right: WildFlyDatasource | null): boolean =>
   JSON.stringify(normalizeDatasource(left)) === JSON.stringify(normalizeDatasource(right));
+
+const tutorialDatasource: WildFlyDatasource = {
+  name: 'ExampleDatasource',
+  jndiName: 'java:/jdbc/example',
+  connectionUrl: 'jdbc:postgresql://qc-db.example.local:5432/example',
+  username: 'qc_user',
+  password: '********',
+  enabled: true,
+};
+const tutorialWarSource = 'tutorial/example-application.war';
+
 export default function WarDeploymentPage() {
   const {
     username,
@@ -80,6 +91,13 @@ export default function WarDeploymentPage() {
   } = currentStore;
   const [now, setNow] = useState(Date.now());
   const [pendingOperationId, setPendingOperationId] = useState('');
+  const [tutorialActive, setTutorialActive] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState(0);
+  const [applicationOpen, setApplicationOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [tutorialApplicationOpen, setTutorialApplicationOpen] = useState(false);
+  const [tutorialProfileOpen, setTutorialProfileOpen] = useState(false);
+  const [tutorialLockExpiresAt, setTutorialLockExpiresAt] = useState<string | null>(null);
   const pendingSnapshotRevision = useRef(0);
   const submissionGuard = useRef(false);
   const reservedProfile = useRef('');
@@ -97,23 +115,91 @@ export default function WarDeploymentPage() {
     profile: selectedProfile?.name,
     mode: 'WRITE',
   });
-  const lockTime = preflight?.lockExpiresAt ? new Date(preflight.lockExpiresAt).getTime() : 0;
-  const remainingMs = lockTime ? Math.max(0, lockTime - now) : 0;
-  const remainingSeconds = Math.ceil(remainingMs / 1000);
-  const expired = !!lockTime && remainingMs <= 0;
   const duplicates = Object.entries(preflight?.duplicateFiles || {});
   const allDuplicatesSelected = duplicates.every(([name, candidates]) => candidates.includes(duplicateSelections[name]));
+  const actualLockTime = preflight?.lockExpiresAt ? new Date(preflight.lockExpiresAt).getTime() : 0;
+  const actualExpired = !!actualLockTime && actualLockTime <= now;
   const canDeploy =
     preflightState === 'ready' &&
     requiredValid &&
-    lockTime > 0 &&
+    actualLockTime > 0 &&
     !preflight?.missingFiles?.length &&
     allDuplicatesSelected &&
-    !expired &&
+    !actualExpired &&
     !submitting &&
     !pendingOperationId &&
     !profileBusy &&
     !profileLock;
+
+  const tutorialVersion = versions[0] || version;
+  const tutorialProfiles = useMemo(
+    () => profiles.filter((item) => item.version === tutorialVersion),
+    [profiles, tutorialVersion],
+  );
+  const tutorialApplication = applications[0]?.application || application;
+  const tutorialProfileId = tutorialProfiles[0]?.id || profileId;
+  const displayApplication = tutorialActive ? tutorialApplication : application;
+  const displayVersion = tutorialActive ? tutorialVersion : version;
+  const displayProfiles = tutorialActive ? tutorialProfiles : filteredProfiles;
+  const displayProfileId = tutorialActive ? tutorialProfileId : profileId;
+  const displaySelectedProfile = tutorialActive
+    ? tutorialProfiles.find((item) => item.id === tutorialProfileId)
+    : selectedProfile;
+  const tutorialPreflight = useMemo<WarPreflightResponse | null>(
+    () =>
+      tutorialActive && tutorialStep >= 4 && tutorialLockExpiresAt
+        ? {
+            ready: true,
+            decisionRequired: true,
+            missingFiles: [],
+            duplicateFiles: {
+              'application.properties': [
+                'WEB-INF/classes/application.properties',
+                'WEB-INF/classes/config/application.properties',
+              ],
+              'CustomFilter.java': [
+                'WEB-INF/classes/com/example/web/CustomFilter.java',
+                'WEB-INF/classes/com/example/security/CustomFilter.java',
+              ],
+            },
+            automaticallyResolved: {
+              'web.xml': 'WEB-INF/web.xml',
+              'log4j2.properties': 'WEB-INF/classes/log4j2.properties',
+            },
+            warnings: [],
+            lockExpiresAt: tutorialLockExpiresAt,
+            activity: null,
+          }
+        : null,
+    [tutorialActive, tutorialLockExpiresAt, tutorialStep],
+  );
+  const displayPreflight = tutorialPreflight || preflight;
+  const displayPreflightState = tutorialPreflight ? 'ready' : preflightState;
+  const displayPreflightChecked = tutorialPreflight ? true : preflightChecked;
+  const displayDatasource = tutorialActive && tutorialStep >= 2 ? tutorialDatasource : datasource;
+  const displayDatasourceState: AsyncState = tutorialActive && tutorialStep >= 2 ? 'ready' : datasourceState;
+  const displayDatasourceError = tutorialActive && tutorialStep >= 2 ? '' : datasourceError;
+  const displaySource = tutorialActive && tutorialStep >= 3 ? [tutorialWarSource] : source;
+  const displayAdditionalConfigRequired = tutorialActive && tutorialStep >= 3 ? true : additionalConfigRequired;
+  const displayRequiredValid = tutorialActive
+    ? !!(displayApplication && displayVersion && displayProfileId && displaySource[0])
+    : requiredValid;
+  const displayProfileBusy = tutorialActive ? false : profileBusy;
+  const displayProfileLock = tutorialActive ? null : profileLock;
+  const lockTime = displayPreflight?.lockExpiresAt ? new Date(displayPreflight.lockExpiresAt).getTime() : 0;
+  const remainingMs = lockTime ? Math.max(0, lockTime - now) : 0;
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  const expired = !!lockTime && remainingMs <= 0;
+  const displayDuplicates = Object.entries(displayPreflight?.duplicateFiles || {});
+  const tutorialDisabled =
+    applicationState !== 'ready' ||
+    profileState !== 'ready' ||
+    !applications.length ||
+    !profiles.length ||
+    preflightChecked ||
+    (preflightState === 'ready' && !actualExpired) ||
+    submitting ||
+    !!pendingOperationId;
 
   useEffect(() => {
     const event = lastSystemEvent;
@@ -288,7 +374,7 @@ export default function WarDeploymentPage() {
 
   const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
-    if (!canDeploy || submissionGuard.current) return;
+    if (tutorialActive || !canDeploy || submissionGuard.current) return;
     submissionGuard.current = true;
     store.setSubmitting(true);
     store.setError('');
@@ -313,11 +399,47 @@ export default function WarDeploymentPage() {
     }
   };
 
+  const startWarTutorial = useCallback(() => {
+    setTutorialActive(true);
+    setTutorialStep(0);
+    setTutorialApplicationOpen(true);
+    setTutorialProfileOpen(false);
+    setTutorialLockExpiresAt(null);
+  }, []);
+
+  const prepareWarTutorialStep = useCallback((index: number): Promise<void> => {
+    setTutorialStep(index);
+    setTutorialApplicationOpen(index === 0);
+    setTutorialProfileOpen(index === 1);
+    if (index === 4) {
+      const startedAt = Date.now();
+      setNow(startedAt);
+      setTutorialLockExpiresAt(new Date(startedAt + 59_000).toISOString());
+    }
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+  }, []);
+
+  const resetWarTutorial = useCallback(() => {
+    setTutorialActive(false);
+    setTutorialStep(0);
+    setTutorialApplicationOpen(false);
+    setTutorialProfileOpen(false);
+    setTutorialLockExpiresAt(null);
+  }, []);
+
   return (
     <Page
       title="Deploy WAR"
       description="Reserve a WildFly profile, validate an existing Tech Drive WAR, and deploy it."
-      headerAction={<PageTutorial steps={warTutorialSteps} />}
+      headerAction={
+        <PageTutorial
+          steps={warTutorialSteps}
+          disabled={tutorialDisabled || tutorialActive}
+          onStart={startWarTutorial}
+          onStepPrepare={prepareWarTutorialStep}
+          onReset={resetWarTutorial}
+        />
+      }
     >
       <form onSubmit={submit} className="grid xl:grid-cols-[1.05fr_.95fr] gap-5 items-start">
         <Card data-tour="war-target">
@@ -328,11 +450,18 @@ export default function WarDeploymentPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            <FormItem>
+            <FormItem data-tour="war-application">
               <FormLabel>Application</FormLabel>
               <Select
-                value={application}
-                onValueChange={(value) => invalidateAnd(store.setApplication, value)}
+                value={displayApplication}
+                open={tutorialActive ? tutorialApplicationOpen : applicationOpen}
+                onOpenChange={(open) => {
+                  if (tutorialActive) setTutorialApplicationOpen(open);
+                  else setApplicationOpen(open);
+                }}
+                onValueChange={(value) => {
+                  if (!tutorialActive) invalidateAnd(store.setApplication, value);
+                }}
                 disabled={applicationState === 'loading'}
               >
                 <SelectTrigger>
@@ -348,10 +477,15 @@ export default function WarDeploymentPage() {
               </Select>
               {applicationError && <FormMessage>{applicationError}</FormMessage>}
             </FormItem>
-            <div className="grid sm:grid-cols-2 gap-4">
+            <div className="grid sm:grid-cols-2 gap-4" data-tour="war-version-profile">
               <FormItem>
                 <FormLabel>WildFly version</FormLabel>
-                <Select value={version} onValueChange={(value) => invalidateAnd(store.setVersion, value)}>
+                <Select
+                  value={displayVersion}
+                  onValueChange={(value) => {
+                    if (!tutorialActive) invalidateAnd(store.setVersion, value);
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select version" />
                   </SelectTrigger>
@@ -368,15 +502,22 @@ export default function WarDeploymentPage() {
               <FormItem>
                 <FormLabel>Profile</FormLabel>
                 <Select
-                  value={profileId}
-                  onValueChange={(value) => invalidateAnd(store.setProfileId, value)}
+                  value={displayProfileId}
+                  open={tutorialActive ? tutorialProfileOpen : profileOpen}
+                  onOpenChange={(open) => {
+                    if (tutorialActive) setTutorialProfileOpen(open);
+                    else setProfileOpen(open);
+                  }}
+                  onValueChange={(value) => {
+                    if (!tutorialActive) invalidateAnd(store.setProfileId, value);
+                  }}
                   disabled={profileState === 'loading'}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select profile" />
                   </SelectTrigger>
                   <SelectContent>
-                    {filteredProfiles.map((item) => (
+                    {displayProfiles.map((item) => (
                       <SelectItem key={item.id} value={item.id}>
                         {item.name}
                         {item.portOffset != null ? ` · offset ${item.portOffset}` : ''}
@@ -384,51 +525,61 @@ export default function WarDeploymentPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                {selectedProfile?.lastDeployedUser && (
-                  <FormDescription>Last deployed by {selectedProfile.lastDeployedUser}</FormDescription>
+                {displaySelectedProfile?.lastDeployedUser && (
+                  <FormDescription>Last deployed by {displaySelectedProfile.lastDeployedUser}</FormDescription>
                 )}
               </FormItem>
             </div>
-            <DatasourceEditor
-              state={datasourceState}
-              error={datasourceError}
-              value={datasource}
-              onChange={(value) => invalidateAnd(store.setDatasource, value)}
-            />
-            <div data-tour="war-source">
-              <p className="text-sm font-medium mb-2">WAR from Tech Drive</p>
-              <FileBrowser
-                rootKey="techDrive"
-                selectableExtension=".war"
-                selected={source}
-                onSelectionChange={(items) => invalidateAnd(store.setSource, items.slice(-1))}
+            <div data-tour="war-datasource">
+              <DatasourceEditor
+                state={displayDatasourceState}
+                error={displayDatasourceError}
+                value={displayDatasource}
+                onChange={(value) => {
+                  if (!tutorialActive) invalidateAnd(store.setDatasource, value);
+                }}
               />
-              {source[0] ? (
-                <FormDescription className="mt-2">
-                  Selected: <span className="font-mono text-foreground">{source[0]}</span>
-                </FormDescription>
-              ) : (
-                <FormMessage className="mt-2">Select one .war file.</FormMessage>
-              )}
             </div>
-            <Label
-              className={`flex items-start gap-3 rounded-md border p-3 ${
-                additionalConfigRequired ? 'border-primary bg-primary/10' : ''
-              }`}
-            >
-              <Checkbox
-                className="mt-0.5"
-                checked={additionalConfigRequired}
-                onCheckedChange={(checked) => invalidateAnd(store.setAdditionalConfigRequired, checked === true)}
-              />
-              <span>
-                <strong>Apply additional WAR configuration</strong>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked when
-                  no additional changes are needed.
+            <div data-tour="war-source-config">
+              <div>
+                <p className="text-sm font-medium mb-2">WAR from Tech Drive</p>
+                <FileBrowser
+                  rootKey="techDrive"
+                  selectableExtension=".war"
+                  selected={displaySource}
+                  onSelectionChange={(items) => {
+                    if (!tutorialActive) invalidateAnd(store.setSource, items.slice(-1));
+                  }}
+                />
+                {displaySource[0] ? (
+                  <FormDescription className="mt-2">
+                    Selected: <span className="font-mono text-foreground">{displaySource[0]}</span>
+                  </FormDescription>
+                ) : (
+                  <FormMessage className="mt-2">Select one .war file.</FormMessage>
+                )}
+              </div>
+              <Label
+                className={`mt-5 flex items-start gap-3 rounded-md border p-3 ${
+                  displayAdditionalConfigRequired ? 'border-primary bg-primary/10' : ''
+                }`}
+              >
+                <Checkbox
+                  className="mt-0.5"
+                  checked={displayAdditionalConfigRequired}
+                  onCheckedChange={(checked) => {
+                    if (!tutorialActive) invalidateAnd(store.setAdditionalConfigRequired, checked === true);
+                  }}
+                />
+                <span>
+                  <strong>Apply additional WAR configuration</strong>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked
+                    when no additional changes are needed.
+                  </span>
                 </span>
-              </span>
-            </Label>
+              </Label>
+            </div>
           </CardContent>
         </Card>
         <Card className="xl:sticky xl:top-5" data-tour="war-preflight">
@@ -438,19 +589,23 @@ export default function WarDeploymentPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <Label
-              className={`flex items-center gap-3 rounded-md border p-3 ${preflightChecked ? 'border-primary bg-primary/10' : ''}`}
+              data-tour="war-preflight-toggle"
+              className={`flex items-center gap-3 rounded-md border p-3 ${displayPreflightChecked ? 'border-primary bg-primary/10' : ''}`}
             >
               <Checkbox
-                checked={preflightChecked}
+                checked={displayPreflightChecked}
                 disabled={
-                  !requiredValid ||
-                  preflightState === 'loading' ||
+                  tutorialActive ||
+                  !displayRequiredValid ||
+                  displayPreflightState === 'loading' ||
                   submitting ||
                   !!pendingOperationId ||
-                  profileBusy ||
-                  !!profileLock
+                  displayProfileBusy ||
+                  !!displayProfileLock
                 }
-                onCheckedChange={(checked) => (checked ? runPreflight() : cancelReservation())}
+                onCheckedChange={(checked) => {
+                  if (!tutorialActive) void (checked ? runPreflight() : cancelReservation());
+                }}
               />
               <span>
                 <strong>Run preflight and reserve profile</strong>
@@ -459,85 +614,88 @@ export default function WarDeploymentPage() {
                 </span>
               </span>
             </Label>
-            {preflightState === 'loading' && (
+            {displayPreflightState === 'loading' && (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Running preflight…
               </p>
             )}
-            {preflightState === 'expired' && (
+            {displayPreflightState === 'expired' && (
               <Notice tone="warning">The exclusive reservation expired. Run preflight again before deploying.</Notice>
             )}
-            {profileBusy && (
+            {displayProfileBusy && (
               <Notice tone="warning">
                 This profile is currently {selectedActivity.status?.toLowerCase() || 'changing state'}. Wait for the backend state
                 to change before starting another deployment.
               </Notice>
             )}
-            <LockNotice lock={profileLock} />
+            <LockNotice lock={displayProfileLock} />
             {pendingOperationId && <Notice>Deployment request accepted. Waiting for the backend activity event…</Notice>}
-            {preflight && preflight.warnings.length > 0 && (
+            {displayPreflight && displayPreflight.warnings.length > 0 && (
               <Notice tone="warning">
                 <strong>Warnings</strong>
                 <ul className="list-disc ml-5 mt-1">
-                  {preflight.warnings.map((item) => (
+                  {displayPreflight.warnings.map((item) => (
                     <li key={item}>{item}</li>
                   ))}
                 </ul>
               </Notice>
             )}
-            {preflight && preflight.missingFiles.length > 0 && (
+            {displayPreflight && displayPreflight.missingFiles.length > 0 && (
               <Notice tone="error">
                 <strong>Missing required files</strong>
                 <ul className="list-disc ml-5 mt-1">
-                  {preflight.missingFiles.map((item) => (
+                  {displayPreflight.missingFiles.map((item) => (
                     <li key={item}>{item}</li>
                   ))}
                 </ul>
               </Notice>
             )}
-            {preflight && Object.keys(preflight.automaticallyResolved).length > 0 && (
-              <Notice>
-                <strong>Automatically resolved</strong>
-                {Object.entries(preflight.automaticallyResolved).map(([file, path]) => (
-                  <div className="font-mono text-xs mt-1" key={file}>
-                    {file} → {path}
-                  </div>
-                ))}
-              </Notice>
-            )}
-            {duplicates.map(([file, candidates]) => (
-              <FormItem key={file}>
-                <FormLabel>Resolve duplicate: {file}</FormLabel>
-                <Select
-                  value={duplicateSelections[file] || ''}
-                  onValueChange={(value) =>
-                    store.setDuplicateSelections((current) => ({
-                      ...current,
-                      [file]: value,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choose the exact candidate path" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {candidates.map((path) => (
-                      <SelectItem key={path} value={path}>
-                        {path}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {!duplicateSelections[file] && <FormMessage>A selection is required.</FormMessage>}
-              </FormItem>
-            ))}
+            <div data-tour="war-conflict-resolution" className="space-y-4">
+              {displayPreflight && Object.keys(displayPreflight.automaticallyResolved).length > 0 && (
+                <Notice>
+                  <strong>Automatically resolved</strong>
+                  {Object.entries(displayPreflight.automaticallyResolved).map(([file, path]) => (
+                    <div className="font-mono text-xs mt-1" key={file}>
+                      {file} → {path}
+                    </div>
+                  ))}
+                </Notice>
+              )}
+              {displayDuplicates.map(([file, candidates]) => (
+                <FormItem key={file}>
+                  <FormLabel>Resolve duplicate: {file}</FormLabel>
+                  <Select
+                    value={duplicateSelections[file] || ''}
+                    onValueChange={(value) => {
+                      if (!tutorialActive)
+                        store.setDuplicateSelections((current) => ({
+                          ...current,
+                          [file]: value,
+                        }));
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose the exact candidate path" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {candidates.map((path) => (
+                        <SelectItem key={path} value={path}>
+                          {path}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!duplicateSelections[file] && <FormMessage>A selection is required.</FormMessage>}
+                </FormItem>
+              ))}
+            </div>
             {cancellationWarning && <Notice tone="warning">{cancellationWarning}</Notice>}
             {error && <Notice tone="error">{error}</Notice>}
-            <Button type="submit" disabled={!canDeploy} className="w-full gap-2" data-tour="war-deploy">
+            <Button type="submit" disabled={tutorialActive || !canDeploy} className="w-full gap-2" data-tour="war-deploy">
               {submitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
-              ) : canDeploy ? (
+              ) : canDeploy && !tutorialActive ? (
                 <Rocket className="w-4 h-4" />
               ) : (
                 <CheckCircle2 className="w-4 h-4" />
@@ -546,7 +704,7 @@ export default function WarDeploymentPage() {
             </Button>
             <p className="text-xs text-muted-foreground flex gap-2">
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              {canDeploy
+              {canDeploy && !tutorialActive
                 ? 'All checks passed. Deploy before the reservation expires.'
                 : 'Complete preflight and resolve every blocking decision.'}
             </p>
