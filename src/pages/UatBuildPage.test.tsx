@@ -24,11 +24,13 @@ type SelectMockProps = {
 const streams: Stream[] = [];
 const api = vi.hoisted(() => ({
   convertUatBuild: vi.fn(),
+  downloadAdditionalConfigSample: vi.fn(),
   getFileRoots: vi.fn(),
   getWarApplications: vi.fn(),
   isLockConflict: vi.fn(() => false),
   preflightUatBuild: vi.fn(),
   releaseUatBuildLock: vi.fn(),
+  saveBlob: vi.fn(),
   techDriveHeaders: vi.fn((username: string) => ({ 'X-TechDrive-Username': username })),
   uatBuildOperationEventUrl: vi.fn((id: string) => `/api/uat-builds/operations/${encodeURIComponent(id)}`),
 }));
@@ -305,7 +307,9 @@ describe('UatBuildPage', () => {
     await waitFor(() => expect(screen.getByRole('combobox')).toHaveAttribute('data-open', 'false'));
     expect(document.querySelector('[data-tour="uat-source"]')).toBeTruthy();
     expect(screen.getByText('tutorial/example.war')).toBeVisible();
+    expect(screen.getByText('Download sample file')).toBeVisible();
     expect(screen.getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Download sample file' })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'Tutorial step 2' }));
     expect(document.querySelector('[data-tour="uat-jenkins"]')).toBeTruthy();

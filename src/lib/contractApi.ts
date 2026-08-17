@@ -330,6 +330,8 @@ export const listFiles = (rootKey: FileRoot['key'], path?: string, signal?: Abor
   );
 export const downloadSingle = (rootKey: FileRoot['key'], path: string): Promise<DownloadResult> =>
   blobRequest(client.get<Blob>('/files/download', { params: { rootKey, path }, responseType: 'blob' }));
+export const downloadAdditionalConfigSample = (): Promise<DownloadResult> =>
+  blobRequest(client.get<Blob>('/files/sample/additionalConfig', { responseType: 'blob' }));
 export const downloadSelection = (rootKey: FileRoot['key'], paths: string[]): Promise<DownloadResult> =>
   blobRequest(client.post<Blob>('/files/download', { rootKey, paths }, { responseType: 'blob' }));
 export const deleteFiles = (rootKey: FileRoot['key'], paths: string[]): Promise<void> =>

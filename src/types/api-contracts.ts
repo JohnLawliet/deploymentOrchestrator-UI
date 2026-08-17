@@ -137,7 +137,6 @@ export interface WildFlyDatasource {
   connectionUrl: string;
   username: string;
   password: string;
-  enabled: boolean;
 }
 /** `deployerName` is server-derived and must never be sent. */
 export interface WarDeploymentRequest {
@@ -630,6 +629,7 @@ export interface ApiRoutes {
   'GET /api/files/roots': { response: FileRoot[] };
   'GET /api/files/list': { query: { rootKey: RootKey; path?: string }; response: FileNode[] };
   'GET /api/files/download': { query: { rootKey: RootKey; path: string }; response: Blob };
+  'GET /api/files/sample/additionalConfig': { response: Blob };
   'POST /api/files/download': { body: DownloadRequest; response: Blob };
   'DELETE /api/files': { body: DeleteRequest; response: void; status: 204 };
   'POST /api/files/rename': { body: RenameRequest; response: void };

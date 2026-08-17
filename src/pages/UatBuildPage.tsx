@@ -4,14 +4,13 @@ import type { FileRoot, UatOperationResponse, UatPreflightResponse } from '@/typ
 import { errorMessage } from '@/types/frontend';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { Check, ChevronDown, Clipboard, FolderArchive, Loader2, LockKeyhole } from 'lucide-react';
+import AdditionalConfigRequiredField from '@/components/AdditionalConfigRequiredField';
 import FileBrowser from '@/components/FileBrowser';
 import LockNotice from '@/components/LockNotice';
 import PageTutorial from '@/components/PageTutorial';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { FormDescription, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Notice, Page } from '@/components/PagePrimitives';
 import { usePortal } from '@/context/PortalContext';
@@ -600,23 +599,11 @@ export default function UatBuildPage() {
                     </FormDescription>
                   )}
                 </BrowserPanel>
-                <Label
-                  className={`flex items-start gap-3 rounded-md border p-3 ${additionalConfigRequired ? 'border-primary bg-primary/10' : ''}`}
-                >
-                  <Checkbox
-                    className="mt-0.5"
-                    checked={additionalConfigRequired}
-                    disabled={tutorialActive}
-                    onCheckedChange={(checked) => changeInput(setAdditionalConfigRequired, checked === true)}
-                  />
-                  <span>
-                    <strong>Apply additional WAR configuration</strong>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked
-                      when no additional changes are needed.
-                    </span>
-                  </span>
-                </Label>
+                <AdditionalConfigRequiredField
+                  checked={additionalConfigRequired}
+                  disabled={tutorialActive}
+                  onCheckedChange={(checked) => changeInput(setAdditionalConfigRequired, checked)}
+                />
               </div>
               <div data-tour="uat-jenkins">
                 <BrowserPanel

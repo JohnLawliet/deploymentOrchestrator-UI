@@ -40,6 +40,7 @@ import {
   createUpload,
   deleteFiles,
   deployJar,
+  downloadAdditionalConfigSample,
   downloadTerminal,
   executeDatabaseQuery,
   executeUpload,
@@ -324,6 +325,20 @@ describe('executeDatabaseQuery', () => {
     });
 
     expect(client.get).toHaveBeenCalledWith('/terminals/operation%2F42/download', { responseType: 'blob' });
+  });
+
+  it('downloads the additionalConfig sample as a blob and reads the save name from Content-Disposition', async () => {
+    client.get.mockResolvedValueOnce({
+      data: new Blob(['key = "value"']),
+      headers: { 'content-disposition': 'attachment; filename="additionalConfig-sample.toml"' },
+    });
+
+    await expect(downloadAdditionalConfigSample()).resolves.toEqual({
+      blob: expect.any(Blob),
+      filename: 'additionalConfig-sample.toml',
+    });
+
+    expect(client.get).toHaveBeenCalledWith('/files/sample/additionalConfig', { responseType: 'blob' });
   });
 
   it('sends the root and selected paths in the bulk file deletion body', async () => {

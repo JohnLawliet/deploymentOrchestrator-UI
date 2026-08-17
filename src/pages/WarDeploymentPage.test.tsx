@@ -13,11 +13,13 @@ type TutorialProps = {
 const api = vi.hoisted(() => ({
   cancelWarPreflight: vi.fn(),
   deployWar: vi.fn(),
+  downloadAdditionalConfigSample: vi.fn(),
   getProfileDatasources: vi.fn(),
   getProfiles: vi.fn(),
   getWarApplications: vi.fn(),
   isLockConflict: vi.fn(() => false),
   preflightWar: vi.fn(),
+  saveBlob: vi.fn(),
 }));
 const portal = vi.hoisted(() => ({
   username: 'tester',
@@ -111,7 +113,6 @@ describe('WarDeploymentPage tutorial', () => {
       connectionUrl: 'jdbc:postgresql://qc-db/orders',
       username: 'orders_user',
       password: 'orders_password',
-      enabled: true,
     });
     api.preflightWar.mockReset();
     api.cancelWarPreflight.mockReset();
@@ -130,6 +131,7 @@ describe('WarDeploymentPage tutorial', () => {
     const preflightCheckbox = () => within(document.querySelector('[data-tour="war-preflight-toggle"]')!).getByRole('checkbox');
 
     await waitFor(() => expect(datasourceInputs()[1]).toHaveValue('java:/jdbc/orders'));
+    expect(screen.getByText('Download sample file')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Select original WAR' }));
     expect(screen.getByTestId('war-browser-selection')).toHaveTextContent('tech/original.war');
 
@@ -137,6 +139,7 @@ describe('WarDeploymentPage tutorial', () => {
     const startTutorial = tutorialControl('Start WAR tutorial');
     await user.click(startTutorial);
     expect(startTutorial).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Download sample file', hidden: true })).toBeDisabled();
 
     fireEvent.click(tutorialControl('Tutorial step 2'));
     expect(screen.getAllByText('orders-qc · offset 100').length).toBeGreaterThan(1);

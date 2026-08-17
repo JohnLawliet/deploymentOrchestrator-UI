@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Rocket } from 'lucide-react';
+import AdditionalConfigRequiredField from '@/components/AdditionalConfigRequiredField';
 import FileBrowser from '@/components/FileBrowser';
 import LockNotice from '@/components/LockNotice';
 import PageTutorial from '@/components/PageTutorial';
@@ -36,7 +37,6 @@ const normalizeDatasource = (value: WildFlyDatasource | null | undefined): WildF
         connectionUrl: value.connectionUrl,
         username: value.username,
         password: value.password,
-        enabled: value.enabled,
       }
     : null;
 const sameDatasource = (left: WildFlyDatasource | null, right: WildFlyDatasource | null): boolean =>
@@ -48,7 +48,6 @@ const tutorialDatasource: WildFlyDatasource = {
   connectionUrl: 'jdbc:postgresql://qc-db.example.local:5432/example',
   username: 'qc_user',
   password: '********',
-  enabled: true,
 };
 const tutorialWarSource = 'tutorial/example-application.war';
 
@@ -559,26 +558,12 @@ export default function WarDeploymentPage() {
                   <FormMessage className="mt-2">Select one .war file.</FormMessage>
                 )}
               </div>
-              <Label
-                className={`mt-5 flex items-start gap-3 rounded-md border p-3 ${
-                  displayAdditionalConfigRequired ? 'border-primary bg-primary/10' : ''
-                }`}
-              >
-                <Checkbox
-                  className="mt-0.5"
-                  checked={displayAdditionalConfigRequired}
-                  onCheckedChange={(checked) => {
-                    if (!tutorialActive) invalidateAnd(store.setAdditionalConfigRequired, checked === true);
-                  }}
-                />
-                <span>
-                  <strong>Apply additional WAR configuration</strong>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked
-                    when no additional changes are needed.
-                  </span>
-                </span>
-              </Label>
+              <AdditionalConfigRequiredField
+                className="mt-5"
+                checked={displayAdditionalConfigRequired}
+                disabled={tutorialActive}
+                onCheckedChange={(checked) => invalidateAnd(store.setAdditionalConfigRequired, checked)}
+              />
             </div>
           </CardContent>
         </Card>
@@ -763,10 +748,6 @@ function DatasourceEditor({
           </FormItem>
         ))}
       </div>
-      <Label className="flex items-center gap-2">
-        <Checkbox checked={value.enabled} onCheckedChange={(checked) => update('enabled', checked === true)} />
-        Enabled
-      </Label>
     </div>
   );
 }
