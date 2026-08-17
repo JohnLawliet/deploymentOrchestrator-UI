@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Database, Loader2, Lock, RefreshCw } from 'lucide-react';
-import { executeDatabaseQuery, getDatabaseTableRows, getDatabaseTables, isPortalIdentityParameter } from '@/lib/contractApi';
+import { executeDatabaseQuery, getAllDatabaseTableRows, getDatabaseTables, isPortalIdentityParameter } from '@/lib/contractApi';
+import TableFiltersDropdown from '@/components/TableFiltersDropdown';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,6 +16,7 @@ type TablePage = DatabasePage<DatabaseRow> & { paginated: boolean };
 type QueryRequestState = { key: string; loading: boolean; error: Error | ApiRequestError | null; success: string };
 type ActiveQuery = { query: DatabaseQuery; key: string; params: Record<string, DatabaseQueryValue>; result: TablePage };
 type LinkedRow = { tableName: string; query: DatabaseQuery; queryKey: string; values: Record<string, DatabaseQueryValue> };
+type FilterColumnConfig = { key: string; label: string };
 class ValidationError extends Error {
   readonly isValidationError = true;
 }
@@ -22,6 +24,29 @@ class ValidationError extends Error {
 const FALLBACK_PAGE = 0;
 const FALLBACK_SIZE = 13;
 const MAXIMUM_SIZE = 100;
+
+const TABLE_FILTER_COLUMNS: Record<string, FilterColumnConfig[]> = {
+  'deployment-records': [
+    { key: 'username', label: 'Deployed By' },
+    { key: 'application', label: 'Application' },
+    { key: 'type', label: 'Type' },
+    { key: 'status', label: 'Status' },
+    { key: 'profile', label: 'Profile' },
+  ],
+  'runtime-resources': [
+    { key: 'resourceType', label: 'Resource Type' },
+    { key: 'displayName', label: 'Display Name' },
+    { key: 'state', label: 'State' },
+    { key: 'servicePort', label: 'Service Port' },
+    { key: 'profileHealth', label: 'Profile Health' },
+    { key: 'lastDeployedUser', label: 'Last Deployed By' },
+  ],
+  'deployment-snapshots': [
+    { key: 'profileUuid', label: 'Profile UUID' },
+    { key: 'application', label: 'Application' },
+    { key: 'state', label: 'State' },
+  ],
+};
 
 function validationError(message: string): ValidationError {
   return new ValidationError(message);
@@ -92,6 +117,28 @@ function validatePage(payload: DatabasePage<DatabaseRow>): TablePage {
     throw validationError(`The table page size must be between 1 and ${MAXIMUM_SIZE}.`);
   }
   return { ...payload, paginated: true };
+}
+
+function filterValueText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+function uniqueColumnOptions(rows: DatabaseRow[], key: string): string[] {
+  const values = new Set<string>();
+  for (const row of rows) {
+    const text = filterValueText(row?.[key]).trim();
+    if (text) values.add(text);
+  }
+  return [...values].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
+}
+
+function rowMatchesFilters(row: DatabaseRow, filters: Record<string, string>): boolean {
+  return Object.entries(filters).every(([key, rawFilter]) => {
+    const filter = rawFilter.trim().toLocaleLowerCase();
+    if (!filter) return true;
+    return filterValueText(row?.[key]).toLocaleLowerCase().includes(filter);
+  });
 }
 function isDatabasePage(value: DatabaseRow | DatabasePage<DatabaseRow>): value is DatabasePage<DatabaseRow> {
   return (
@@ -438,9 +485,10 @@ export default function TablesPage() {
   const [selectedName, setSelectedName] = useState('');
   const [page, setPage] = useState(FALLBACK_PAGE);
   const [size, setSize] = useState(FALLBACK_SIZE);
-  const [tablePage, setTablePage] = useState<TablePage | null>(null);
+  const [allRows, setAllRows] = useState<DatabaseRow[] | null>(null);
   const [tableError, setTableError] = useState<Error | ApiRequestError | null>(null);
   const [tableRefresh, setTableRefresh] = useState(0);
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [expandedCells, setExpandedCells] = useState<Set<string>>(() => new Set());
   const [activeQuery, setActiveQuery] = useState<ActiveQuery | null>(null);
   const [queryRequest, setQueryRequest] = useState<QueryRequestState>({ key: '', loading: false, error: null, success: '' });
@@ -489,6 +537,14 @@ export default function TablesPage() {
     const values = [25, FALLBACK_SIZE, 100, MAXIMUM_SIZE, config.size, config.maximum];
     return [...new Set(values.filter((value) => value > 0 && value <= config.maximum))].sort((a, b) => a - b);
   }, [config]);
+  const filterColumns = useMemo(() => {
+    if (!descriptor) return [];
+    const configured = TABLE_FILTER_COLUMNS[descriptor.name] || [];
+    return configured.map((item) => {
+      const column = descriptor.columns.find((entry) => entry.key === item.key);
+      return { key: item.key, label: column?.label || item.label };
+    });
+  }, [descriptor]);
 
   useEffect(() => {
     queryControllerRef.current?.abort();
@@ -496,6 +552,8 @@ export default function TablesPage() {
     setActiveQuery(null);
     setQueryRequest({ key: '', loading: false, error: null, success: '' });
     setExpandedCells(new Set());
+    setColumnFilters({});
+    setPage(FALLBACK_PAGE);
     const linkedRow = linkedRowRef.current;
     if (linkedRow?.tableName === selectedName) {
       linkedRowRef.current = null;
@@ -507,21 +565,23 @@ export default function TablesPage() {
 
   useEffect(() => {
     if (!descriptor || descriptor.permissions.read !== true) {
-      setTablePage(null);
+      setAllRows(null);
       return undefined;
     }
     const controller = new AbortController();
-    setTablePage(null);
+    setAllRows(null);
     setTableError(null);
-    getDatabaseTableRows(descriptor.name, page, size, controller.signal)
-      .then(validatePage)
-      .then(setTablePage)
+    getAllDatabaseTableRows(descriptor.name, controller.signal)
+      .then((result) => {
+        setAllRows(result.items);
+        setPage(FALLBACK_PAGE);
+      })
       .catch((error: unknown) => {
         if (!(error instanceof Error && error.name === 'CanceledError'))
           setTableError(error instanceof Error ? error : new Error('Unable to load table rows.'));
       });
     return () => controller.abort();
-  }, [descriptor, page, size, tableRefresh]);
+  }, [descriptor, tableRefresh]);
 
   const selectTable = (item: DatabaseTable) => {
     if (item.permissions.read !== true) return;
@@ -612,7 +672,40 @@ export default function TablesPage() {
     setExpandedCells(new Set());
   };
 
-  const displayPage = activeQuery?.result || tablePage;
+  const filteredRows = useMemo(() => {
+    if (!allRows) return null;
+    const hasActiveFilters = Object.values(columnFilters).some((value) => value.trim());
+    if (!hasActiveFilters) return allRows;
+    return allRows.filter((row) => rowMatchesFilters(row, columnFilters));
+  }, [allRows, columnFilters]);
+
+  const listPage = useMemo<TablePage | null>(() => {
+    if (!filteredRows) return null;
+    const total = filteredRows.length;
+    const safeSize = Math.max(size, 1);
+    const totalPages = total === 0 ? 0 : Math.ceil(total / safeSize);
+    const safePage = totalPages === 0 ? 0 : Math.min(page, totalPages - 1);
+    const start = safePage * safeSize;
+    return {
+      items: filteredRows.slice(start, start + safeSize),
+      page: safePage,
+      size: safeSize,
+      total,
+      paginated: true,
+    };
+  }, [filteredRows, page, size]);
+
+  const filterFields = useMemo(() => {
+    if (!allRows || filterColumns.length === 0) return [];
+    return filterColumns.map((column) => ({
+      key: column.key,
+      label: column.label,
+      options: uniqueColumnOptions(allRows, column.key),
+    }));
+  }, [allRows, filterColumns]);
+
+  const displayPage = activeQuery?.result || listPage;
+  const hasActiveFilters = Object.values(columnFilters).some((value) => value.trim());
   const totalPages = displayPage ? Math.ceil(displayPage.total / displayPage.size) : 0;
   const rangeStart = displayPage?.total ? displayPage.page * displayPage.size + 1 : 0;
   const rangeEnd = displayPage ? Math.min((displayPage.page + 1) * displayPage.size, displayPage.total) : 0;
@@ -624,7 +717,9 @@ export default function TablesPage() {
       ? Math.min(integerValue(activeSizeParameter?.maximum) ?? MAXIMUM_SIZE, MAXIMUM_SIZE)
       : MAXIMUM_SIZE;
   const displayedSize = activeQuery ? Number(activeQuery.params.size ?? displayPage?.size ?? FALLBACK_SIZE) : size;
-  const displayedPage = activeQuery ? Number(activeQuery.params.page ?? displayPage?.page ?? FALLBACK_PAGE) : page;
+  const displayedPage = activeQuery
+    ? Number(activeQuery.params.page ?? displayPage?.page ?? FALLBACK_PAGE)
+    : (displayPage?.page ?? page);
   const displayedSizeOptions = activeQuery
     ? [...new Set([13, 25, 50, 100, displayedSize, activeMaximum].filter((value) => value > 0 && value <= activeMaximum))].sort(
         (a, b) => a - b,
@@ -647,8 +742,20 @@ export default function TablesPage() {
       });
     else {
       setSize(nextSize);
-      setPage(config.page);
+      setPage(FALLBACK_PAGE);
     }
+  };
+
+  const changeColumnFilter = (key: string, value: string) => {
+    setColumnFilters((current) => ({ ...current, [key]: value }));
+    setPage(FALLBACK_PAGE);
+    setExpandedCells(new Set());
+  };
+
+  const clearColumnFilters = () => {
+    setColumnFilters({});
+    setPage(FALLBACK_PAGE);
+    setExpandedCells(new Set());
   };
 
   const toggleCell = (cellKey: string) => {
@@ -718,20 +825,31 @@ export default function TablesPage() {
                         <CardTitle className="text-lg">{descriptor.label}</CardTitle>
                         <CardDescription className="mt-1">{descriptor.description || descriptor.name}</CardDescription>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-2"
-                        disabled={!displayPage || queryRequest.loading}
-                        onClick={() =>
-                          activeQuery
-                            ? runQuery(activeQuery.query, activeQuery.key, activeQuery.params)
-                            : setTableRefresh((current) => current + 1)
-                        }
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Refresh
-                      </Button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {!activeQuery && (
+                          <TableFiltersDropdown
+                            filters={filterFields}
+                            values={columnFilters}
+                            onChange={changeColumnFilter}
+                            onClear={clearColumnFilters}
+                            disabled={!allRows || queryRequest.loading}
+                          />
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          disabled={!displayPage || queryRequest.loading}
+                          onClick={() =>
+                            activeQuery
+                              ? runQuery(activeQuery.query, activeQuery.key, activeQuery.params)
+                              : setTableRefresh((current) => current + 1)
+                          }
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Refresh
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-4 p-4 pt-0">
@@ -759,7 +877,11 @@ export default function TablesPage() {
                     )}
                     {displayPage && displayPage.items.length === 0 && (
                       <div className="empty-state">
-                        {activeQuery ? 'The query returned no rows.' : 'This table contains no rows for the current page.'}
+                        {activeQuery
+                          ? 'The query returned no rows.'
+                          : hasActiveFilters
+                            ? 'No rows match the current filters.'
+                            : 'This table contains no rows.'}
                       </div>
                     )}
                     {displayPage && displayPage.items.length > 0 && (

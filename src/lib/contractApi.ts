@@ -383,6 +383,29 @@ export const getDatabaseTableRows = (
     'Unable to load table data',
   );
 
+/** Backend list MAX_PAGE_SIZE; used to prefetch an entire table in as few round-trips as possible. */
+export const DATABASE_TABLE_FETCH_PAGE_SIZE = 200;
+
+export const getAllDatabaseTableRows = async (
+  table: string,
+  signal?: AbortSignal,
+): Promise<{ items: DatabaseRow[]; total: number }> => {
+  const items: DatabaseRow[] = [];
+  let page = 0;
+  let total = 0;
+
+  while (true) {
+    const response = await getDatabaseTableRows(table, page, DATABASE_TABLE_FETCH_PAGE_SIZE, signal);
+    const batch = Array.isArray(response.items) ? response.items : [];
+    total = Number.isInteger(response.total) && response.total >= 0 ? response.total : items.length + batch.length;
+    items.push(...batch);
+    if (batch.length < DATABASE_TABLE_FETCH_PAGE_SIZE || items.length >= total) break;
+    page += 1;
+  }
+
+  return { items, total: Math.max(total, items.length) };
+};
+
 function parameterLocation(
   parameter: DatabaseQuery['parameters'][number],
 ): Lowercase<DatabaseQuery['parameters'][number]['location']> {
