@@ -308,7 +308,7 @@ describe('OperationProgressPanel revised output contracts', () => {
     expect(screen.queryByRole('button', { name: 'Download full log' })).not.toBeInTheDocument();
   });
 
-  it('completes JAR restart progress when the resource is already ACTIVE', () => {
+  it('keeps JAR restart progress below 100 until its own progress event completes', () => {
     portal.viewingOperation = operationRecord({
       deploymentId: 'restart-1',
       resourceType: 'JAR',
@@ -329,14 +329,62 @@ describe('OperationProgressPanel revised output contracts', () => {
       },
     };
 
+    const view = render(<OperationProgressPanel />);
+
+    expect(screen.getAllByText('RESTARTING').length).toBeGreaterThan(0);
+    expect(screen.getByText('60%')).toBeInTheDocument();
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+    expect(screen.getByText('Restarting application')).toBeInTheDocument();
+
+    portal.operations = {
+      'restart-1': {
+        ...portal.operations['restart-1'],
+        progress: operationProgressState({
+          status: 'COMPLETED',
+          phaseCode: 'COMPLETED',
+          progressPercentage: 100,
+          deploymentOutcome: 'SUCCEEDED',
+          message: 'Restart complete',
+        }),
+      },
+    };
+    view.rerender(<OperationProgressPanel />);
+
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+  });
+
+  it('keeps a WildFly WAR deployment at its last confirmed progress after RESOURCE_ACTIVE', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'war-90',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      profileId: 'profile-1',
+      operationType: 'WAR_DEPLOY',
+      label: 'Deploy WAR · orders',
+    });
+    portal.operations = {
+      'war-90': {
+        deploymentId: 'war-90',
+        resourceType: 'WILDFLY_PROFILE',
+        operationType: 'WAR_DEPLOY',
+        statusEvent: 'RESOURCE_ACTIVE',
+        state: 'ACTIVE',
+        message: 'WildFly process is active',
+        progress: operationProgressState({
+          status: 'RESTARTING',
+          phaseCode: 'DEPLOYMENT_MARKER_WAIT',
+          progressPercentage: 90,
+          message: 'Waiting for WildFly deployment result',
+        }),
+      },
+    };
+
     render(<OperationProgressPanel />);
 
-    expect(screen.getByText('ACTIVE')).toBeInTheDocument();
-    expect(screen.getByText('100%')).toBeInTheDocument();
-    expect(screen.queryByText('60%')).not.toBeInTheDocument();
-    expect(screen.queryByText('RESTARTING')).not.toBeInTheDocument();
-    expect(screen.queryByText('Phase:')).not.toBeInTheDocument();
-    expect(screen.getByText('Application is active')).toBeInTheDocument();
+    expect(screen.getByText('90%')).toBeInTheDocument();
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Waiting for WildFly deployment result').length).toBeGreaterThan(0);
   });
 
   it('replaces stale progress with a backend lifecycle failure and exposes an available log', async () => {

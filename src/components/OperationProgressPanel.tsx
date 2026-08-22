@@ -66,15 +66,7 @@ function TimelineStepItem({
   );
 }
 
-const terminalStates = new Set(['RESOURCE_ACTIVE', 'RESOURCE_FAILED', 'RESOURCE_INACTIVE', 'ACTIVE', 'FAILED', 'INACTIVE']);
-
-const lifecycleStatuses = {
-  DEPLOYMENT_FAILED: 'FAILED',
-  DEPLOYMENT_SUCCEEDED: 'COMPLETED',
-  RESOURCE_FAILED: 'FAILED',
-  RESOURCE_ACTIVE: 'ACTIVE',
-  RESOURCE_INACTIVE: 'INACTIVE',
-};
+const lifecycleFailureEvents = new Set(['DEPLOYMENT_FAILED', 'RESOURCE_FAILED', 'OPERATION_FAILED']);
 
 const missingJarLogMessage = 'No jarDeployment.log was produced because the application launcher did not start.';
 const isNotFound = (error: unknown): boolean =>
@@ -147,41 +139,34 @@ export default function OperationProgressPanel() {
   const rollbackFailed = rollbackOperation && operationProgress?.rollbackState === 'FAILED';
   const deploymentFailed = operationProgress?.deploymentOutcome === 'FAILED';
   const profilePowerOperation = isProfilePowerOperation(operationType);
-  const lifecycleStatus =
-    profilePowerOperation || manualWarRollback || !live?.statusEvent
-      ? undefined
-      : lifecycleStatuses[live.statusEvent as keyof typeof lifecycleStatuses];
   const progressValue =
     typeof operationProgress?.progressPercentage === 'number' && Number.isFinite(operationProgress.progressPercentage)
       ? operationProgress.progressPercentage
       : null;
-  const rawStatus =
-    lifecycleStatus ||
-    operationProgress?.status ||
-    (!profilePowerOperation && !manualWarRollback ? live?.statusEvent : undefined) ||
-    (!profilePowerOperation && !manualWarRollback ? live?.state : undefined) ||
-    (!profilePowerOperation && !manualWarRollback ? viewingOperation?.status : undefined) ||
-    'STARTING';
+  const lifecycleFailed = lifecycleFailureEvents.has(live?.statusEvent || '');
+  const rawStatus = lifecycleFailed ? 'FAILED' : operationProgress?.status || 'STARTING';
   const status = rollbackRestoring ? 'RESTORING' : rollbackRestored ? 'RESTORED' : rollbackFailed ? 'FAILED' : rawStatus;
-  const statusTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(rawStatus);
+  const statusTerminal = ['FAILED', 'CANCELLED'].includes(rawStatus);
   const suppliedProgress = (() => {
     const available = [progressValue].filter((value): value is number => value !== null);
     return available.length ? Math.max(...available) : undefined;
   })();
-  const completed = rawStatus === 'COMPLETED' || (manualWarRollback && operationProgress?.deploymentOutcome === 'SUCCEEDED');
+  const completed =
+    operationProgress?.phaseCode === 'COMPLETED' ||
+    operationProgress?.status === 'COMPLETED' ||
+    operationProgress?.deploymentOutcome === 'SUCCEEDED';
   const failed = deploymentFailed || rollbackFailed || rawStatus.includes('FAILED');
   const cancelled = status === 'CANCELLED';
-  const complete = completed || terminalStates.has(status);
-  const lifecycleComplete = !manualWarRollback && !failed && !cancelled && (status === 'ACTIVE' || status === 'INACTIVE');
+  const complete = completed || failed || cancelled;
   const phaseCode =
-    (statusTerminal || lifecycleComplete) && !rollbackRestoring && !rollbackRestored ? undefined : operationProgress?.phaseCode;
+    (statusTerminal || completed) && !rollbackRestoring && !rollbackRestored ? undefined : operationProgress?.phaseCode;
   const progress =
-    completed || lifecycleComplete
+    completed
       ? 100
       : (failed && !rollbackRestoring && !rollbackRestored) || cancelled
         ? undefined
-        : (suppliedProgress ?? (terminalStates.has(status) ? 100 : undefined));
-  const progressWidth = Math.min(100, Math.max(0, progress ?? 32));
+        : suppliedProgress;
+  const progressWidth = Math.min(100, Math.max(0, progress ?? 0));
   const restoredState = live?.restoredResourceState;
   const message = rollbackRestoring
     ? automaticRollback
@@ -193,11 +178,11 @@ export default function OperationProgressPanel() {
         : 'Rollback failed. Manual recovery is required.'
       : rollbackRestored && deploymentFailed
         ? `Deployment failed. The previous deployment was restored${restoredState ? ` and the profile is ${restoredState.toLowerCase()}` : ''}.`
-        : manualWarRollback && completed
+      : manualWarRollback && completed
           ? 'Previous deployment restored successfully.'
-          : (lifecycleStatus ? live?.message : operationProgress?.message) ||
-            live?.message ||
+          : (failed ? live?.message : undefined) ||
             operationProgress?.message ||
+            live?.message ||
             viewingOperation?.errorMessage ||
             (complete ? 'Operation reached a terminal resource state.' : 'The backend is processing this operation.');
   const badgeVariant = failed ? 'destructive' : completed ? 'success' : cancelled ? 'muted' : complete ? 'success' : 'warning';

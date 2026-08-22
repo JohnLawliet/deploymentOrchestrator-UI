@@ -458,7 +458,10 @@ describe('frontend profile system events', () => {
       active: operationRecord({ deploymentId: 'active', registered: true }),
       stale: operationRecord({ deploymentId: 'stale' }),
       pending: operationRecord({ deploymentId: 'pending', registered: true, status: 'STARTING' }),
-      terminal: operationRecord({ deploymentId: 'terminal', statusEvent: 'DEPLOYMENT_SUCCEEDED' }),
+      terminal: operationRecord({
+        deploymentId: 'terminal',
+        progress: { deploymentOutcome: 'SUCCEEDED' } as OperationRecord['progress'],
+      }),
     };
     expect(
       reconcileOperationsWithSnapshot(
@@ -474,7 +477,7 @@ describe('frontend profile system events', () => {
     });
   });
 
-  it('keeps a just-registered WAR operation and viewing panel across an early SYSTEM_SNAPSHOT', () => {
+  it('keeps a just-registered WAR operation and its confirmed progress across an early SYSTEM_SNAPSHOT', () => {
     const warOp = operationRecord({
       deploymentId: 'war-deploy-1',
       registered: true,
@@ -482,6 +485,12 @@ describe('frontend profile system events', () => {
       resourceKey: 'WILDFLY_PROFILE:profile-1',
       status: 'STARTING',
       label: 'Deploy WAR · orders',
+      progress: {
+        phaseCode: 'DEPLOYMENT_MARKER_WAIT',
+        status: 'RESTARTING',
+        progressPercentage: 90,
+        deploymentOutcome: null,
+      } as OperationRecord['progress'],
     });
     const operations = { 'war-deploy-1': warOp };
     const snapshot = systemSnapshot({
@@ -575,7 +584,7 @@ describe('frontend profile system events', () => {
     ).toBeNull();
   });
 
-  it('completes a registered JAR restart when RESOURCE_ACTIVE omits deploymentId', () => {
+  it('keeps a registered JAR restart in progress when RESOURCE_ACTIVE omits deploymentId', () => {
     const operations = {
       'restart-1': operationRecord({
         deploymentId: 'restart-1',
@@ -609,14 +618,10 @@ describe('frontend profile system events', () => {
         resourceType: 'JAR',
         message: 'Application is active',
       })['restart-1']?.progress,
-    ).toMatchObject({
-      progressPercentage: 100,
-      deploymentOutcome: 'SUCCEEDED',
-      status: 'COMPLETED',
-    });
+    ).toMatchObject({ progressPercentage: 60, status: 'RESTARTING' });
   });
 
-  it('completes a registered WAR profile start when RESOURCE_ACTIVE omits deploymentId', () => {
+  it('does not complete a registered WildFly profile action when RESOURCE_ACTIVE omits deploymentId', () => {
     const operations = {
       'start-1': operationRecord({
         deploymentId: 'start-1',
@@ -634,11 +639,7 @@ describe('frontend profile system events', () => {
         resourceType: 'WILDFLY_PROFILE',
         message: 'Profile is active',
       })['start-1']?.progress,
-    ).toMatchObject({
-      progressPercentage: 100,
-      deploymentOutcome: 'SUCCEEDED',
-      status: 'COMPLETED',
-    });
+    ).toBeUndefined();
   });
 });
 

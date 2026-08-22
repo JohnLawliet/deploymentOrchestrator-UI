@@ -1,7 +1,6 @@
 import type { DeploymentStatus, OperationProgress, SystemEvent } from '@/types/api-contracts';
 import type { OperationMap, OperationProgressState, OperationRecord, OperationStatus } from '@/types/frontend';
 import { isFailureProgress, warRollbackPhasePercentage } from './qcWarProgress';
-import { isProfilePowerOperation } from './profilePowerProgress';
 
 type OperationProgressEvent = Extract<SystemEvent, { eventType: 'OPERATION_PROGRESS' }>;
 type ProgressStep = Omit<OperationProgress, 'status'> & { status: string | null; timestamp: string; message: string | null };
@@ -25,13 +24,7 @@ export const DEPLOYMENT_STATUSES: ReadonlySet<DeploymentStatus> = new Set([
 
 const TERMINAL_DEPLOYMENT_STATUSES: ReadonlySet<OperationStatus> = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
 
-const TERMINAL_LIFECYCLE_EVENTS = new Set([
-  'RESOURCE_ACTIVE',
-  'RESOURCE_FAILED',
-  'RESOURCE_INACTIVE',
-  'DEPLOYMENT_SUCCEEDED',
-  'DEPLOYMENT_FAILED',
-]);
+const TERMINAL_FAILURE_LIFECYCLE_EVENTS = new Set(['RESOURCE_FAILED', 'DEPLOYMENT_FAILED', 'OPERATION_FAILED']);
 const UNREGISTERED_TTL_MS = 15 * 60 * 1000;
 const MAX_UNREGISTERED_OPERATIONS = 100;
 const MAX_EVENT_KEYS = 200;
@@ -196,6 +189,22 @@ export function reduceOperationProgress(operations: OperationMap, event: Operati
   );
 }
 
+/**
+ * The operation progress stream is the only authoritative source for a
+ * deployment's successful completion. Callers must supply the deployment the
+ * user is currently following; replayed or concurrent operation events are
+ * deliberately ignored instead of being inferred from a shared resource key.
+ */
+export function reduceTrackedOperationProgress(
+  operations: OperationMap,
+  deploymentId: string,
+  event: OperationProgressEvent,
+  now = Date.now(),
+): OperationMap {
+  if (!deploymentId || event.deploymentId !== deploymentId) return operations;
+  return reduceOperationProgress(operations, event, now);
+}
+
 export function registerOperationInMap(
   operations: OperationMap,
   operation: Partial<OperationRecord>,
@@ -308,12 +317,13 @@ export function applyOperationFinished(
 
   const normalized = String(outcome || '').toUpperCase();
   const failed = normalized === 'FAILED';
-  const succeeded = normalized === 'COMPLETED' || normalized === 'SUCCEEDED' || normalized === 'ACTIVE';
-  if (!failed && !succeeded) return operations;
+  // Completion notifications are not authoritative progress. A matching
+  // OPERATION_PROGRESS(COMPLETED) event is required before the UI may show 100%.
+  if (!failed) return operations;
 
-  const status = failed ? 'FAILED' : 'COMPLETED';
-  const phaseCode = failed ? 'FAILED' : 'COMPLETED';
-  const progressPercentage = failed ? (previous?.progressPercentage ?? null) : 100;
+  const status = 'FAILED';
+  const phaseCode = 'FAILED';
+  const progressPercentage = previous?.progressPercentage ?? null;
   const timestamp = new Date(now).toISOString();
   const key = JSON.stringify(['finished', operationId, status, message ?? '']);
   const step: ProgressStep = {
@@ -339,8 +349,8 @@ export function applyOperationFinished(
     revision: (previous?.revision || 0) + 1,
     eventKeys: withBoundedItem(previous?.eventKeys ?? [], key, MAX_EVENT_KEYS),
     steps: withBoundedItem(previous?.steps ?? [], step, MAX_STEPS),
-    deploymentOutcome: failed ? 'FAILED' : 'SUCCEEDED',
-    failureMessage: failed ? (message ?? previous?.failureMessage ?? null) : (previous?.failureMessage ?? null),
+    deploymentOutcome: 'FAILED',
+    failureMessage: message ?? previous?.failureMessage ?? null,
     rollbackState: previous?.rollbackState ?? null,
     rollbackMessage: previous?.rollbackMessage ?? null,
     rollbackFailureMessage: previous?.rollbackFailureMessage ?? null,
@@ -357,21 +367,6 @@ export function applyOperationFinished(
   };
 }
 
-const REGISTERED_LIFECYCLE_FINISH_EVENTS = new Set(['RESOURCE_ACTIVE', 'RESOURCE_INACTIVE', 'DEPLOYMENT_SUCCEEDED']);
-
-function isTrackedRuntimeResource(resourceType: string | null | undefined, resourceKey: string): boolean {
-  return (
-    resourceType === 'JAR' ||
-    resourceType === 'WILDFLY_PROFILE' ||
-    resourceKey.startsWith('JAR:') ||
-    resourceKey.startsWith('WILDFLY_PROFILE:')
-  );
-}
-
-function isProfilePowerRecord(operation: OperationRecord | undefined): boolean {
-  return operation?.resourceType === 'WILDFLY_PROFILE' && isProfilePowerOperation(operation.operationType);
-}
-
 function isWarRollbackRecord(operation: OperationRecord | null | undefined): boolean {
   return operation?.resourceType === 'WILDFLY_PROFILE' && operation.operationType === 'WAR_ROLLBACK';
 }
@@ -381,37 +376,23 @@ export function finishRegisteredOperationOnLifecycle(
   event: Pick<SystemEvent, 'eventType' | 'deploymentId' | 'resourceKey' | 'resourceType' | 'message'>,
   now = Date.now(),
 ): OperationMap {
-  if (!REGISTERED_LIFECYCLE_FINISH_EVENTS.has(event.eventType)) return operations;
-  const resourceKey = event.resourceKey ?? '';
-  if (!isTrackedRuntimeResource(event.resourceType, resourceKey)) return operations;
-
-  const deploymentId = deploymentIdOf(event);
-  if (deploymentId && operations[deploymentId]) {
-    if (isProfilePowerRecord(operations[deploymentId]) || isWarRollbackRecord(operations[deploymentId])) return operations;
-    return applyOperationFinished(operations, deploymentId, 'COMPLETED', event.message, now);
-  }
-
-  const match = Object.values(operations).find(
-    (operation) =>
-      operation.registered &&
-      !isOperationTerminal(operation) &&
-      !isProfilePowerRecord(operation) &&
-      !isWarRollbackRecord(operation) &&
-      operation.resourceKey === resourceKey &&
-      isTrackedRuntimeResource(operation.resourceType, String(operation.resourceKey || '')),
-  );
-  const matchedId = deploymentIdOf(match);
-  return matchedId ? applyOperationFinished(operations, matchedId, 'COMPLETED', event.message, now) : operations;
+  // Resource lifecycle signals describe the process/resource, not a specific
+  // deployment result. Do not use them to infer successful completion or to
+  // correlate by resource key. Explicit failures continue through
+  // OPERATION_FINISHED, whose deployment ID is required by the SSE contract.
+  void event;
+  void now;
+  return operations;
 }
 
 export function isOperationTerminal(operation: OperationRecord | null | undefined): boolean {
   const progress = operation?.progress;
   if (progress?.deploymentOutcome === 'SUCCEEDED' || progress?.deploymentOutcome === 'FAILED') return true;
   if (progress?.rollbackState === 'RESTORING' || progress?.rollbackState === 'RESTORED') return false;
-  const status = progress?.status || operation?.status;
+  const status = progress?.status;
   if (isTerminalDeploymentStatus(status)) return true;
   if (isWarRollbackRecord(operation)) return false;
-  return TERMINAL_LIFECYCLE_EVENTS.has(operation?.statusEvent ?? '');
+  return TERMINAL_FAILURE_LIFECYCLE_EVENTS.has(operation?.statusEvent ?? '');
 }
 
 export function activeRegisteredOperations(operations: OperationMap): OperationRecord[] {

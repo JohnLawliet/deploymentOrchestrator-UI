@@ -30,7 +30,7 @@ import {
   applyOperationFinished,
   finishRegisteredOperationOnLifecycle,
   isOperationTerminal,
-  reduceOperationProgress,
+  reduceTrackedOperationProgress,
   registerOperationInMap,
 } from '@/lib/operationProgress';
 import { getStoredPortalUsername, PORTAL_USERNAME_SESSION_KEY } from '@/lib/portalSession';
@@ -512,7 +512,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const [lastSystemEvent, setLastSystemEvent] = useState<PortalEvent | null>(null);
   const [operations, setOperations] = useState<OperationMap>({});
-  const [viewingOperation, setViewingOperation] = useState<OperationRecord | null>(null);
+  const [viewingOperation, setViewingOperationState] = useState<OperationRecord | null>(null);
   const [profileLogLines, setProfileLogLines] = useState<ProfileLogMap>({});
   const [presenceState, setPresenceState] = useState(() => replacePresence([]));
   const [lockState, setLockState] = useState(() => replaceLocks([]));
@@ -520,6 +520,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const [systemToasts, setSystemToasts] = useState<SystemToast[]>([]);
   const mapsRef = useRef(activityMaps);
   const operationsRef = useRef(operations);
+  const viewingOperationRef = useRef(viewingOperation);
   const completionKeysRef = useRef<string[]>([]);
   const lastActivityReportRef = useRef<number | null>(null);
   const lockLabelsRef = useRef<Record<string, string>>({});
@@ -532,11 +533,23 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     operationsRef.current = operations;
   }, [operations]);
-  validatedRef.current = validated;
+  useEffect(() => {
+    viewingOperationRef.current = viewingOperation;
+  }, [viewingOperation]);
+  useEffect(() => {
+    validatedRef.current = validated;
+  }, [validated]);
   const updateOperations = useCallback((updater: OperationMap | ((current: OperationMap) => OperationMap)) => {
     setOperations((current) => {
       const next = typeof updater === 'function' ? updater(current) : updater;
       operationsRef.current = next;
+      return next;
+    });
+  }, []);
+  const setViewingOperation = useCallback<Dispatch<SetStateAction<OperationRecord | null>>>((updater) => {
+    setViewingOperationState((current) => {
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      viewingOperationRef.current = next;
       return next;
     });
   }, []);
@@ -651,7 +664,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setValidationState('idle');
     setSystemStatus('disconnected');
     setSnapshotRevision(0);
-  }, [updateOperations]);
+  }, [setViewingOperation, updateOperations]);
 
   const handleBackendUnavailable = useCallback(() => {
     if (validatedRef.current) changeUser();
@@ -828,6 +841,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           const section = String(details.section || '').toUpperCase();
           const resourceKey = details.resourceKey || event.resourceKey;
           const ownedOperation = isOwnedOperationEvent(event, username, operationsRef.current, details.username);
+          const viewedDeploymentId = deploymentIdOf(viewingOperationRef.current);
+          const trackedOperationId = viewedDeploymentId
+            ? operationId === viewedDeploymentId
+              ? operationId
+              : ''
+            : operationsRef.current[operationId]?.registered
+              ? operationId
+              : '';
           const resourceId = String(resourceKey || '').replace(/^(WILDFLY_PROFILE|JAR|FRONTEND_PROFILE):/, '');
           const frontendHotfix =
             section === 'HOTFIX' &&
@@ -854,9 +875,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
               });
             }
           }
-          if (ownedOperation && operationId && outcome) {
+          if (ownedOperation && trackedOperationId && outcome) {
             updateOperations((current) =>
-              applyOperationFinished(current, operationId, String(outcome), details.summary || event.message),
+              applyOperationFinished(current, trackedOperationId, String(outcome), details.summary || event.message),
             );
           }
           setLastSystemEvent(event);
@@ -865,7 +886,18 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }
         if (event.eventType === 'OPERATION_PROGRESS') {
           if (!isOwnedOperationEvent(event, username, operationsRef.current)) return;
-          updateOperations((current) => reduceOperationProgress(current, event));
+          const eventDeploymentId = String(event.deploymentId || '');
+          if (!eventDeploymentId) return;
+          const viewedDeploymentId = deploymentIdOf(viewingOperationRef.current);
+          const trackedOperationId = viewedDeploymentId
+            ? eventDeploymentId === viewedDeploymentId
+              ? viewedDeploymentId
+              : ''
+            : operationsRef.current[eventDeploymentId]?.registered
+              ? eventDeploymentId
+              : '';
+          if (!trackedOperationId) return;
+          updateOperations((current) => reduceTrackedOperationProgress(current, trackedOperationId, event));
           if (event.resources?.status === 'FAILED' && eventResourceType(event) === 'WILDFLY_PROFILE') {
             const profileId = eventProfileId(event);
             void Promise.all([
@@ -912,9 +944,20 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         const jarResourceKey = jarResourceKeyForReconciliation(event);
         if (jarResourceKey) reconcileResourceActivity(jarResourceKey).catch(() => {});
         const deploymentId = deploymentIdOf(event);
+        const viewedDeploymentId = deploymentIdOf(viewingOperationRef.current);
+        const trackedLifecycleOperationId = viewedDeploymentId
+          ? deploymentId === viewedDeploymentId
+            ? deploymentId
+            : ''
+          : deploymentId && operationsRef.current[deploymentId]?.registered
+            ? deploymentId
+            : '';
         updateOperations((current) => {
-          const merged = deploymentId
-            ? { ...current, [deploymentId]: mergeOperationEventRecord(current[deploymentId], event) }
+          const merged = trackedLifecycleOperationId && current[trackedLifecycleOperationId]
+            ? {
+                ...current,
+                [trackedLifecycleOperationId]: mergeOperationEventRecord(current[trackedLifecycleOperationId], event),
+              }
             : current;
           return finishRegisteredOperationOnLifecycle(merged, event);
         });
@@ -970,6 +1013,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     reconcileResourceActivity,
     rememberLockLabel,
     showSystemToast,
+    setViewingOperation,
     updateOperations,
   ]);
 
@@ -988,7 +1032,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       setViewingOperation(record);
       return record;
     },
-    [updateOperations, username],
+    [setViewingOperation, updateOperations, username],
   );
 
   const onlineUsers = useMemo(() => sortOnlineUsers(presenceState.users, username), [presenceState.users, username]);
@@ -1047,6 +1091,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       operations,
       registerOperation,
       viewingOperation,
+      setViewingOperation,
       profileLogLines,
       clearProfileLogs,
       onlineUsers,

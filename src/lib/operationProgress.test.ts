@@ -5,6 +5,7 @@ import {
   isOperationTerminal,
   parseOperationProgressData,
   reduceOperationProgress,
+  reduceTrackedOperationProgress,
   registerOperationInMap,
 } from './operationProgress';
 import { systemEvent } from '@/test/factories';
@@ -151,6 +152,21 @@ describe('operation progress canonical correlation', () => {
     expect(reduceOperationProgress(terminal, stale)).toBe(terminal);
   });
 
+  it('ignores a completed progress event for a different active deployment', () => {
+    const active = progressEvent('deployment-a');
+    active.resources = { ...active.resources, phaseCode: 'DEPLOYMENT_MARKER_WAIT', status: 'RESTARTING', progressPercentage: 90 };
+    const tracked = reduceOperationProgress({}, active);
+    const stale = progressEvent('deployment-b');
+    stale.resources = { ...stale.resources, phaseCode: 'COMPLETED', status: 'COMPLETED', progressPercentage: 100 };
+
+    expect(reduceTrackedOperationProgress(tracked, 'deployment-a', stale)).toBe(tracked);
+    expect(tracked['deployment-a']?.progress).toMatchObject({
+      phaseCode: 'DEPLOYMENT_MARKER_WAIT',
+      progressPercentage: 90,
+      deploymentOutcome: null,
+    });
+  });
+
   it('retains the failed deployment result while recording post-failure cleanup progress', () => {
     const failed = progressEvent('deployment-1');
     failed.message = 'Health verification timed out.';
@@ -280,7 +296,7 @@ describe('operation progress canonical correlation', () => {
     expect(isOperationTerminal(failure['rollback-1'])).toBe(true);
   });
 
-  it('applies OPERATION_FINISHED outcomes onto registered progress', () => {
+  it('uses OPERATION_FINISHED only for an explicit failure', () => {
     const registered = registerOperationInMap(
       reduceOperationProgress({}, progressEvent('war-1')),
       { deploymentId: 'war-1', operationType: 'WAR_DEPLOY' },
@@ -288,16 +304,7 @@ describe('operation progress canonical correlation', () => {
       'Deploy WAR',
     );
 
-    expect(applyOperationFinished(registered, 'war-1', 'COMPLETED', 'WAR deploy finished')['war-1']).toMatchObject({
-      status: 'COMPLETED',
-      progress: {
-        phaseCode: 'COMPLETED',
-        status: 'COMPLETED',
-        progressPercentage: 100,
-        deploymentOutcome: 'SUCCEEDED',
-        message: 'WAR deploy finished',
-      },
-    });
+    expect(applyOperationFinished(registered, 'war-1', 'COMPLETED', 'WAR deploy finished')).toBe(registered);
 
     expect(applyOperationFinished(registered, 'war-1', 'FAILED', 'boom')['war-1']).toMatchObject({
       status: 'FAILED',
@@ -312,16 +319,11 @@ describe('operation progress canonical correlation', () => {
 
     expect(applyOperationFinished(registered, 'war-1', 'UNKNOWN')).toBe(registered);
 
-    expect(applyOperationFinished(registered, 'war-1', 'ACTIVE', 'Application is active')['war-1']?.progress).toMatchObject({
-      phaseCode: 'COMPLETED',
-      status: 'COMPLETED',
-      progressPercentage: 100,
-      deploymentOutcome: 'SUCCEEDED',
-    });
-    expect(applyOperationFinished(registered, 'war-1', 'SUCCEEDED')['war-1']?.progress?.deploymentOutcome).toBe('SUCCEEDED');
+    expect(applyOperationFinished(registered, 'war-1', 'ACTIVE', 'Application is active')).toBe(registered);
+    expect(applyOperationFinished(registered, 'war-1', 'SUCCEEDED')).toBe(registered);
   });
 
-  it('completes a registered JAR restart when RESOURCE_ACTIVE has no deploymentId', () => {
+  it('does not complete a registered JAR restart from RESOURCE_ACTIVE', () => {
     const restartProgress = progressEvent('restart-1');
     restartProgress.resourceKey = 'JAR:vendor-portal';
     restartProgress.resourceType = 'JAR';
@@ -346,12 +348,12 @@ describe('operation progress canonical correlation', () => {
       message: 'Application is active',
     });
 
+    expect(finished).toBe(registered);
     expect(finished['restart-1']?.progress).toMatchObject({
-      phaseCode: 'COMPLETED',
-      status: 'COMPLETED',
-      progressPercentage: 100,
-      deploymentOutcome: 'SUCCEEDED',
-      message: 'Application is active',
+      phaseCode: 'RESTARTING',
+      status: 'RESTARTING',
+      progressPercentage: 60,
+      deploymentOutcome: null,
     });
   });
 
