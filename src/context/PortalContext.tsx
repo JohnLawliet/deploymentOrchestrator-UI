@@ -866,6 +866,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (event.eventType === 'OPERATION_PROGRESS') {
           if (!isOwnedOperationEvent(event, username, operationsRef.current)) return;
           updateOperations((current) => reduceOperationProgress(current, event));
+          if (event.resources?.status === 'FAILED' && eventResourceType(event) === 'WILDFLY_PROFILE') {
+            const profileId = eventProfileId(event);
+            void Promise.all([
+              reconcileResourceActivity(`WILDFLY_PROFILE:${profileId}`).catch(() => null),
+              reconcileProfileActivity(profileId).catch(() => null),
+            ]);
+          }
           if (event.resources?.status === 'COMPLETED') setLastSystemEvent(event);
           return;
         }
@@ -894,7 +901,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           );
         }
         if (event.eventType === 'TERMINAL_AVAILABLE' && eventResourceType(event) === 'WILDFLY_PROFILE') {
-          reconcileProfileActivity(eventProfileId(event)).catch(() => {});
+          const profileId = eventProfileId(event);
+          setViewingOperation((current) =>
+            current?.resourceType === 'WILDFLY_PROFILE' && current.profileId === profileId
+              ? { ...current, profileLogUnavailable: false }
+              : current,
+          );
+          reconcileProfileActivity(profileId).catch(() => {});
         }
         const jarResourceKey = jarResourceKeyForReconciliation(event);
         if (jarResourceKey) reconcileResourceActivity(jarResourceKey).catch(() => {});

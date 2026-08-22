@@ -5,7 +5,6 @@ import RollbackButton from '@/components/RollbackButton';
 import { usePortal } from '@/context/PortalContext';
 import {
   downloadTerminal,
-  getOperation,
   saveBlob,
   resolvedTerminalEventUrl,
   stopProfile,
@@ -31,7 +30,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import type { DeploymentRecord, TerminalOutputEvent } from '@/types/api-contracts';
+import type { TerminalOutputEvent } from '@/types/api-contracts';
 import { errorMessage } from '@/types/frontend';
 
 type TimelineStep = { id: string; label: string; description: string };
@@ -113,9 +112,15 @@ const rollbackDetails = (value: unknown): { rollbackResult?: string; rollbackMes
 };
 
 export default function OperationProgressPanel() {
-  const { viewingOperation, setViewingOperation, operations, reconcileResourceActivity, profileLogLines, clearProfileLogs } =
-    usePortal();
-  const [record, setRecord] = useState<DeploymentRecord | null>(null);
+  const {
+    viewingOperation,
+    setViewingOperation,
+    operations,
+    reconcileResourceActivity,
+    profileLogLines,
+    clearProfileLogs,
+    mergeActivity,
+  } = usePortal();
   const [actionState, setActionState] = useState('');
   const [actionError, setActionError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
@@ -131,9 +136,10 @@ export default function OperationProgressPanel() {
   const operationId = deploymentIdOf(viewingOperation);
   const live = operationId ? operations[operationId] : null;
   const operationProgress = live?.progress;
-  const operationType = live?.operationType || viewingOperation?.operationType || record?.type;
+  const operationType = live?.operationType || viewingOperation?.operationType || viewingOperation?.type;
   const warDeployment = operationType === 'WAR_DEPLOY' || operationType === 'QC_WAR';
   const manualWarRollback = operationType === 'WAR_ROLLBACK';
+  const wildFlyWarOperation = warDeployment || manualWarRollback;
   const automaticRollback = warDeployment && !manualWarRollback && !!operationProgress?.rollbackState;
   const rollbackOperation = automaticRollback || manualWarRollback;
   const rollbackRestoring = rollbackOperation && operationProgress?.rollbackState === 'RESTORING';
@@ -142,41 +148,31 @@ export default function OperationProgressPanel() {
   const deploymentFailed = operationProgress?.deploymentOutcome === 'FAILED';
   const profilePowerOperation = isProfilePowerOperation(operationType);
   const lifecycleStatus =
-    profilePowerOperation || !live?.statusEvent
+    profilePowerOperation || manualWarRollback || !live?.statusEvent
       ? undefined
       : lifecycleStatuses[live.statusEvent as keyof typeof lifecycleStatuses];
   const progressValue =
     typeof operationProgress?.progressPercentage === 'number' && Number.isFinite(operationProgress.progressPercentage)
       ? operationProgress.progressPercentage
       : null;
-  const recordProgress =
-    typeof record?.progressPercentage === 'number' && Number.isFinite(record.progressPercentage)
-      ? record.progressPercentage
-      : null;
-  const recordAdvancesProgress = recordProgress !== null && (progressValue === null || recordProgress > progressValue);
-  const currentRecordStatus = recordAdvancesProgress ? record?.status : undefined;
   const rawStatus =
     lifecycleStatus ||
-    (!profilePowerOperation ? currentRecordStatus : undefined) ||
     operationProgress?.status ||
-    (!profilePowerOperation ? live?.statusEvent : undefined) ||
-    (!profilePowerOperation ? live?.state : undefined) ||
-    (!profilePowerOperation ? record?.status : undefined) ||
-    (!profilePowerOperation ? viewingOperation?.status : undefined) ||
+    (!profilePowerOperation && !manualWarRollback ? live?.statusEvent : undefined) ||
+    (!profilePowerOperation && !manualWarRollback ? live?.state : undefined) ||
+    (!profilePowerOperation && !manualWarRollback ? viewingOperation?.status : undefined) ||
     'STARTING';
   const status = rollbackRestoring ? 'RESTORING' : rollbackRestored ? 'RESTORED' : rollbackFailed ? 'FAILED' : rawStatus;
   const statusTerminal = ['COMPLETED', 'FAILED', 'CANCELLED'].includes(rawStatus);
   const suppliedProgress = (() => {
-    const available = [progressValue, profilePowerOperation ? null : recordProgress].filter(
-      (value): value is number => value !== null,
-    );
+    const available = [progressValue].filter((value): value is number => value !== null);
     return available.length ? Math.max(...available) : undefined;
   })();
   const completed = rawStatus === 'COMPLETED' || (manualWarRollback && operationProgress?.deploymentOutcome === 'SUCCEEDED');
   const failed = deploymentFailed || rollbackFailed || rawStatus.includes('FAILED');
   const cancelled = status === 'CANCELLED';
   const complete = completed || terminalStates.has(status);
-  const lifecycleComplete = !failed && !cancelled && (status === 'ACTIVE' || status === 'INACTIVE');
+  const lifecycleComplete = !manualWarRollback && !failed && !cancelled && (status === 'ACTIVE' || status === 'INACTIVE');
   const phaseCode =
     (statusTerminal || lifecycleComplete) && !rollbackRestoring && !rollbackRestored ? undefined : operationProgress?.phaseCode;
   const progress =
@@ -190,7 +186,7 @@ export default function OperationProgressPanel() {
   const message = rollbackRestoring
     ? automaticRollback
       ? 'Deployment failed — restoring previous version.'
-      : 'Restoring previous deployment.'
+      : operationProgress?.message || 'Restoring previous deployment.'
     : rollbackFailed
       ? automaticRollback
         ? 'Deployment failed and rollback failed. Manual recovery is required.'
@@ -202,7 +198,7 @@ export default function OperationProgressPanel() {
           : (lifecycleStatus ? live?.message : operationProgress?.message) ||
             live?.message ||
             operationProgress?.message ||
-            record?.errorMessage ||
+            viewingOperation?.errorMessage ||
             (complete ? 'Operation reached a terminal resource state.' : 'The backend is processing this operation.');
   const badgeVariant = failed ? 'destructive' : completed ? 'success' : cancelled ? 'muted' : complete ? 'success' : 'warning';
   const resourceKey = live?.resourceKey || viewingOperation?.resourceKey || '';
@@ -230,15 +226,15 @@ export default function OperationProgressPanel() {
     () => (terminalOutput ? terminalOutputLines : profileLogLines?.[profileId] || []),
     [terminalOutput, terminalOutputLines, profileLogLines, profileId],
   );
-  const showFailedWarLog = warDeployment && deploymentFailed && live?.logAvailable === true;
+  const showFailedWarLog = wildFlyWarOperation && deploymentFailed && live?.logAvailable === true;
   const showJarLog = resourceType === 'JAR' && !viewingOperation?.outputRequested && live?.logAvailable === true;
   const showSuccessfulWarActions =
     completed && warDeployment && String(resourceKey).startsWith('WILDFLY_PROFILE:') && !!profileId;
   const rollback = rollbackDetails(live?.resources);
   const progressSteps = operationProgress?.steps ?? [];
-  const timeline: Timeline | null = warDeployment
+  const timeline: Timeline | null = wildFlyWarOperation
     ? {
-        ariaLabel: 'QC WAR deployment timeline',
+        ariaLabel: manualWarRollback ? 'WildFly WAR rollback timeline' : 'QC WAR deployment timeline',
         steps: QC_WAR_TIMELINE,
         currentStepId: qcWarPhase(operationProgress?.phaseCode)?.timelineId,
         phaseLabel: qcWarPhaseLabel(operationProgress?.phaseCode),
@@ -278,6 +274,14 @@ export default function OperationProgressPanel() {
       })
       .catch((error: unknown) => {
         if (disposed) return;
+        if (errorStatus(error) === 400) {
+          mergeActivity({ id: profileId, serverLogAvailable: false }, 'WILDFLY_PROFILE');
+          setViewingOperation((current) =>
+            current?.resourceType === 'WILDFLY_PROFILE' && current.profileId === profileId
+              ? { ...current, profileLogUnavailable: true }
+              : current,
+          );
+        }
         setConnection('disconnected');
         setConnectionError(errorMessage(error));
       });
@@ -287,7 +291,7 @@ export default function OperationProgressPanel() {
         void unsubscribeProfileLogs(profileId).catch(() => {});
       }
     };
-  }, [profileLogOutput, profileId, clearProfileLogs]);
+  }, [profileLogOutput, profileId, clearProfileLogs, mergeActivity, setViewingOperation]);
 
   useEffect(() => {
     if (!terminalOutput) return undefined;
@@ -352,27 +356,6 @@ export default function OperationProgressPanel() {
     }
   }, [autoScroll, outputLines]);
 
-  useEffect(() => {
-    if (!operationId) return undefined;
-    let disposed = false;
-    const refreshRecord = () => {
-      getOperation(operationId)
-        .then((result) => {
-          if (!disposed) setRecord(result);
-        })
-        .catch(() => {});
-    };
-    setRecord(null);
-    setActionError('');
-    setActionMessage('');
-    refreshRecord();
-    const refreshTimer = window.setInterval(refreshRecord, 2000);
-    return () => {
-      disposed = true;
-      window.clearInterval(refreshTimer);
-    };
-  }, [operationId]);
-
   if (!viewingOperation) return null;
 
   const downloadLog = async () => {
@@ -424,7 +407,7 @@ export default function OperationProgressPanel() {
   };
 
   const stopSelectedProfile = async () => {
-    if (!window.confirm(`Stop profile ${record?.profile || profileId}?`)) return;
+    if (!window.confirm(`Stop profile ${viewingOperation.profile || profileId}?`)) return;
     setActionState('stopping');
     setActionError('');
     setActionMessage('');
@@ -510,7 +493,7 @@ export default function OperationProgressPanel() {
             </Button>
           </div>
         </div>
-        <span className="truncate font-mono text-xs text-muted-foreground">{operationId}</span>
+        {operationId && <span className="truncate font-mono text-xs text-muted-foreground">{operationId}</span>}
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
           <div
             className={`h-full ${failed ? 'bg-red-500' : cancelled ? 'bg-slate-500' : 'bg-primary'} transition-all`}
@@ -534,9 +517,11 @@ export default function OperationProgressPanel() {
         {deploymentFailed && operationProgress?.failureMessage && operationProgress.failureMessage !== message && (
           <p className="text-sm text-red-700">{operationProgress.failureMessage}</p>
         )}
-        {rollbackFailed && operationProgress?.rollbackFailureMessage && (
-          <p className="text-sm text-red-700">{operationProgress.rollbackFailureMessage}</p>
-        )}
+        {rollbackFailed &&
+          operationProgress?.rollbackFailureMessage &&
+          operationProgress.rollbackFailureMessage !== operationProgress.failureMessage && (
+            <p className="text-sm text-red-700">{operationProgress.rollbackFailureMessage}</p>
+          )}
         {timeline && timeline.steps.length > 0 && (
           <TooltipProvider delayDuration={200}>
             <ol
@@ -615,7 +600,11 @@ export default function OperationProgressPanel() {
                   )}
                   {actionState === 'stopping' ? 'Stopping…' : 'Stop profile'}
                 </Button>
-                <RollbackButton profileId={profileId} profileName={record?.profile || profileId} disabled={!!actionState} />
+                <RollbackButton
+                  profileId={profileId}
+                  profileName={viewingOperation.profile || profileId}
+                  disabled={!!actionState}
+                />
               </>
             )}
           </div>

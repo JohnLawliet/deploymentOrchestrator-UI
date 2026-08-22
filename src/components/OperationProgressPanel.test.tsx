@@ -9,6 +9,7 @@ type MockFunction = ReturnType<typeof vi.fn>;
 type StreamOptions = { onmessage?: (message: EventSourceMessage) => void; signal: AbortSignal };
 type PortalMock = {
   clearProfileLogs: MockFunction;
+  mergeActivity: MockFunction;
   operations: OperationMap;
   profileLogLines: ProfileLogMap;
   reconcileResourceActivity: MockFunction;
@@ -19,7 +20,6 @@ type PortalMock = {
 const stream = vi.hoisted(() => ({ url: '', options: null as StreamOptions | null }));
 const api = vi.hoisted(() => ({
   downloadTerminal: vi.fn(),
-  getOperation: vi.fn(),
   resolvedTerminalEventUrl: vi.fn(
     (url: string | null | undefined, deploymentId: string) => url || `/api/terminals/${deploymentId}/events`,
   ),
@@ -31,6 +31,7 @@ const api = vi.hoisted(() => ({
 }));
 const portal = vi.hoisted((): PortalMock => ({
   clearProfileLogs: vi.fn(),
+  mergeActivity: vi.fn(),
   operations: {},
   profileLogLines: {},
   reconcileResourceActivity: vi.fn(),
@@ -56,11 +57,11 @@ import OperationProgressPanel from './OperationProgressPanel';
 describe('OperationProgressPanel revised output contracts', () => {
   beforeEach(() => {
     Object.values(api).forEach((mock) => mock.mockClear?.());
-    api.getOperation.mockResolvedValue({});
     api.subscribeProfileLogs.mockResolvedValue({});
     api.unsubscribeProfileLogs.mockResolvedValue({});
     api.downloadTerminal.mockResolvedValue({ blob: new Blob(['log']), filename: 'deployment.log' });
     portal.clearProfileLogs.mockReset();
+    portal.mergeActivity.mockReset();
     portal.operations = {};
     portal.profileLogLines = {};
     portal.setViewingOperation.mockReset();
@@ -116,6 +117,24 @@ describe('OperationProgressPanel revised output contracts', () => {
     portal.viewingOperation = null;
     view.rerender(<OperationProgressPanel />);
     expect(api.unsubscribeProfileLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a WildFly profile log unavailable when its subscription is rejected with HTTP 400', async () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'profile-output',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      profileId: 'profile-1',
+      outputRequested: true,
+      status: 'ACTIVE',
+    });
+    api.subscribeProfileLogs.mockRejectedValue(Object.assign(new Error('server.log is no longer available'), { status: 400 }));
+
+    render(<OperationProgressPanel />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('server.log is no longer available');
+    expect(portal.mergeActivity).toHaveBeenCalledWith({ id: 'profile-1', serverLogAvailable: false }, 'WILDFLY_PROFILE');
+    expect(portal.setViewingOperation).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it('streams JAR terminal output for a selected dashboard deployment and closes it with the drawer', async () => {
@@ -525,57 +544,94 @@ describe('OperationProgressPanel revised output contracts', () => {
     expect(screen.getByText('Rollback failed. Manual recovery is required.')).toBeVisible();
   });
 
-  it('advances WAR progress from polled deployment records while stuck on early live progress', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      portal.viewingOperation = operationRecord({
-        deploymentId: 'war-poll-1',
+  it('keeps a WAR rollback open through the deployment marker and only succeeds after COMPLETED', () => {
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'rollback-marker-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      profileId: 'profile-1',
+      operationType: 'WAR_ROLLBACK',
+      label: 'Rollback WAR · orders',
+    });
+    portal.operations = {
+      'rollback-marker-1': {
+        deploymentId: 'rollback-marker-1',
+        operationType: 'WAR_ROLLBACK',
         resourceType: 'WILDFLY_PROFILE',
-        resourceKey: 'WILDFLY_PROFILE:profile-1',
-        operationType: 'WAR_DEPLOY',
-        label: 'Deploy WAR · orders',
-      });
-      portal.operations = {
-        'war-poll-1': {
-          deploymentId: 'war-poll-1',
-          operationType: 'WAR_DEPLOY',
-          resourceKey: 'WILDFLY_PROFILE:profile-1',
-          registered: true,
-          progress: operationProgressState({
-            status: 'VALIDATING',
-            phaseCode: 'VALIDATING',
-            progressPercentage: 5,
-            message: 'Validating',
-          }),
-        },
-      };
-      api.getOperation
-        .mockResolvedValueOnce({
-          deploymentId: 'war-poll-1',
-          status: 'VALIDATING',
-          progressPercentage: 5,
-          type: 'QC_WAR',
-        })
-        .mockResolvedValue({
-          deploymentId: 'war-poll-1',
-          status: 'DEPLOYING',
-          progressPercentage: 75,
-          type: 'QC_WAR',
-        });
+        statusEvent: 'RESOURCE_ACTIVE',
+        state: 'ACTIVE',
+        progress: operationProgressState({
+          phaseCode: 'DEPLOYMENT_MARKER_WAIT',
+          status: 'RESTARTING',
+          progressPercentage: 70,
+          rollbackState: 'RESTORING',
+          message: 'Waiting for WildFly deployment marker.',
+        }),
+      },
+    };
+    const view = render(<OperationProgressPanel />);
 
-      render(<OperationProgressPanel />);
-      expect(await screen.findByText('5%')).toBeVisible();
-      expect(screen.getAllByText('VALIDATING').length).toBeGreaterThan(0);
+    expect(screen.getByText('70%')).toBeVisible();
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+    expect(screen.getByText('Waiting for WildFly deployment result')).toBeVisible();
+    expect(screen.getByLabelText('WildFly WAR rollback timeline')).toBeVisible();
+    expect(screen.queryByText('ACTIVE')).not.toBeInTheDocument();
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
-      });
+    portal.operations = {
+      'rollback-marker-1': {
+        ...portal.operations['rollback-marker-1'],
+        progress: operationProgressState({
+          phaseCode: 'COMPLETED',
+          status: 'COMPLETED',
+          progressPercentage: 100,
+          deploymentOutcome: 'SUCCEEDED',
+          rollbackState: 'RESTORED',
+          message: 'Rollback completed.',
+        }),
+      },
+    };
+    view.rerender(<OperationProgressPanel />);
 
-      expect(await screen.findByText('DEPLOYING')).toBeVisible();
-      expect(screen.getByText('75%')).toBeVisible();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(screen.getByText('100%')).toBeVisible();
+    expect(screen.getByText('Previous deployment restored successfully.')).toBeVisible();
+  });
+
+  it('shows the backend marker failure without presenting a failed WAR rollback as active', () => {
+    const backendError = 'WildFly deployment marker failed. Stop WildFly and release the locked server.log before retrying.';
+    portal.viewingOperation = operationRecord({
+      deploymentId: 'rollback-marker-failed-1',
+      resourceType: 'WILDFLY_PROFILE',
+      resourceKey: 'WILDFLY_PROFILE:profile-1',
+      profileId: 'profile-1',
+      operationType: 'WAR_ROLLBACK',
+      label: 'Rollback WAR · orders',
+    });
+    portal.operations = {
+      'rollback-marker-failed-1': {
+        deploymentId: 'rollback-marker-failed-1',
+        operationType: 'WAR_ROLLBACK',
+        resourceType: 'WILDFLY_PROFILE',
+        statusEvent: 'RESOURCE_ACTIVE',
+        state: 'ACTIVE',
+        progress: operationProgressState({
+          phaseCode: 'FAILED',
+          status: 'FAILED',
+          progressPercentage: 70,
+          deploymentOutcome: 'FAILED',
+          rollbackState: 'FAILED',
+          failureMessage: backendError,
+          rollbackFailureMessage: backendError,
+          message: backendError,
+        }),
+      },
+    };
+
+    render(<OperationProgressPanel />);
+
+    expect(screen.getByText('FAILED')).toBeVisible();
+    expect(screen.getByText(backendError)).toBeVisible();
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+    expect(screen.queryByText('ACTIVE')).not.toBeInTheDocument();
   });
 
   it('stretches the progress header when profile and JAR output are unavailable', () => {

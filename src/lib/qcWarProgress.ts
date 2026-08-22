@@ -33,6 +33,21 @@ export const QC_WAR_PHASES: Readonly<Record<string, QcWarPhase>> = {
   FAILURE_DETECTED: { label: 'Deployment failure detected' },
 };
 
+/**
+ * A rollback resumes after the deployment has already been restored to disk,
+ * so its WildFly startup phases intentionally use different milestones from a
+ * full WAR deployment.
+ */
+export const WAR_ROLLBACK_PHASE_PERCENTAGES: Readonly<Record<string, number>> = {
+  ROLLBACK_STARTED: 35,
+  PROFILE_STARTING: 55,
+  DEPLOYMENT_MARKER_WAIT: 70,
+  HEALTH_VERIFYING: 90,
+};
+
+export const warRollbackPhasePercentage = (phaseCode: string | null | undefined): number | null =>
+  phaseCode ? (WAR_ROLLBACK_PHASE_PERCENTAGES[phaseCode] ?? null) : null;
+
 export const QC_WAR_TIMELINE: readonly QcWarTimelineStep[] = [
   {
     id: 'extract',

@@ -1,6 +1,6 @@
 import type { DeploymentStatus, OperationProgress, SystemEvent } from '@/types/api-contracts';
 import type { OperationMap, OperationProgressState, OperationRecord, OperationStatus } from '@/types/frontend';
-import { isFailureProgress } from './qcWarProgress';
+import { isFailureProgress, warRollbackPhasePercentage } from './qcWarProgress';
 import { isProfilePowerOperation } from './profilePowerProgress';
 
 type OperationProgressEvent = Extract<SystemEvent, { eventType: 'OPERATION_PROGRESS' }>;
@@ -122,20 +122,25 @@ export function reduceOperationProgress(operations: OperationMap, event: Operati
   const supplied = event.resources;
   if (previous?.deploymentOutcome === 'SUCCEEDED') return operations;
   const status = supplied.status || previous?.status || null;
+  const manualWarRollback = existing.operationType === 'WAR_ROLLBACK';
+  const fallbackPercentage = manualWarRollback ? warRollbackPhasePercentage(supplied.phaseCode) : null;
   const progressPercentage =
     supplied.phaseCode === 'COMPLETED' || status === 'COMPLETED'
       ? 100
       : supplied.progressPercentage === null
-        ? (previous?.progressPercentage ?? null)
-        : Math.max(previous?.progressPercentage ?? 0, supplied.progressPercentage);
+        ? fallbackPercentage === null
+          ? (previous?.progressPercentage ?? null)
+          : Math.max(previous?.progressPercentage ?? 0, fallbackPercentage)
+        : Math.max(previous?.progressPercentage ?? 0, supplied.progressPercentage, fallbackPercentage ?? 0);
   const failure = isFailureProgress(supplied);
   const rollbackStarted = supplied.phaseCode === 'ROLLBACK_STARTED';
   const rollbackCompleted = supplied.phaseCode === 'ROLLBACK_COMPLETED';
-  const rollbackState = rollbackStarted
+  const rollbackInProgress = rollbackStarted || (manualWarRollback && !failure && status !== 'COMPLETED');
+  const rollbackState = rollbackInProgress
     ? 'RESTORING'
-    : rollbackCompleted || (supplied.phaseCode === 'COMPLETED' && previous?.rollbackState === 'RESTORING')
+    : rollbackCompleted || (supplied.phaseCode === 'COMPLETED' && (previous?.rollbackState === 'RESTORING' || manualWarRollback))
       ? 'RESTORED'
-      : failure && previous?.rollbackState === 'RESTORING'
+      : failure && (previous?.rollbackState === 'RESTORING' || manualWarRollback)
         ? 'FAILED'
         : (previous?.rollbackState ?? null);
   const deploymentOutcome = failure
@@ -169,9 +174,9 @@ export function reduceOperationProgress(operations: OperationMap, event: Operati
     deploymentOutcome,
     failureMessage: previous?.failureMessage ?? (failure && event.message ? event.message : null),
     rollbackState,
-    rollbackMessage: rollbackStarted || rollbackCompleted ? event.message : (previous?.rollbackMessage ?? null),
+    rollbackMessage: rollbackInProgress || rollbackCompleted ? event.message : (previous?.rollbackMessage ?? null),
     rollbackFailureMessage:
-      failure && previous?.rollbackState === 'RESTORING' && event.message
+      failure && (previous?.rollbackState === 'RESTORING' || manualWarRollback) && event.message
         ? event.message
         : (previous?.rollbackFailureMessage ?? null),
   };
@@ -367,6 +372,10 @@ function isProfilePowerRecord(operation: OperationRecord | undefined): boolean {
   return operation?.resourceType === 'WILDFLY_PROFILE' && isProfilePowerOperation(operation.operationType);
 }
 
+function isWarRollbackRecord(operation: OperationRecord | null | undefined): boolean {
+  return operation?.resourceType === 'WILDFLY_PROFILE' && operation.operationType === 'WAR_ROLLBACK';
+}
+
 export function finishRegisteredOperationOnLifecycle(
   operations: OperationMap,
   event: Pick<SystemEvent, 'eventType' | 'deploymentId' | 'resourceKey' | 'resourceType' | 'message'>,
@@ -378,7 +387,7 @@ export function finishRegisteredOperationOnLifecycle(
 
   const deploymentId = deploymentIdOf(event);
   if (deploymentId && operations[deploymentId]) {
-    if (isProfilePowerRecord(operations[deploymentId])) return operations;
+    if (isProfilePowerRecord(operations[deploymentId]) || isWarRollbackRecord(operations[deploymentId])) return operations;
     return applyOperationFinished(operations, deploymentId, 'COMPLETED', event.message, now);
   }
 
@@ -387,6 +396,7 @@ export function finishRegisteredOperationOnLifecycle(
       operation.registered &&
       !isOperationTerminal(operation) &&
       !isProfilePowerRecord(operation) &&
+      !isWarRollbackRecord(operation) &&
       operation.resourceKey === resourceKey &&
       isTrackedRuntimeResource(operation.resourceType, String(operation.resourceKey || '')),
   );
@@ -400,6 +410,7 @@ export function isOperationTerminal(operation: OperationRecord | null | undefine
   if (progress?.rollbackState === 'RESTORING' || progress?.rollbackState === 'RESTORED') return false;
   const status = progress?.status || operation?.status;
   if (isTerminalDeploymentStatus(status)) return true;
+  if (isWarRollbackRecord(operation)) return false;
   return TERMINAL_LIFECYCLE_EVENTS.has(operation?.statusEvent ?? '');
 }
 

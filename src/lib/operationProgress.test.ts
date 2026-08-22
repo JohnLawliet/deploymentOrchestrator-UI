@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyOperationFinished,
   finishRegisteredOperationOnLifecycle,
+  isOperationTerminal,
   parseOperationProgressData,
   reduceOperationProgress,
   registerOperationInMap,
@@ -207,6 +208,76 @@ describe('operation progress canonical correlation', () => {
       rollbackState: 'RESTORED',
       progressPercentage: 100,
     });
+  });
+
+  it('keeps a WAR rollback in progress through its WildFly marker and health phases', () => {
+    const registered = registerOperationInMap(
+      {},
+      { deploymentId: 'rollback-1', resourceType: 'WILDFLY_PROFILE', operationType: 'WAR_ROLLBACK' },
+      'WILDFLY_PROFILE:profile-1',
+      'Rollback WAR',
+    );
+    const starting = progressEvent('rollback-1');
+    starting.resources = { ...starting.resources, phaseCode: 'PROFILE_STARTING', status: 'RESTARTING', progressPercentage: null };
+    const markerWait = progressEvent('rollback-1');
+    markerWait.timestamp = '2026-07-28T10:01:00Z';
+    markerWait.resources = {
+      ...markerWait.resources,
+      phaseCode: 'DEPLOYMENT_MARKER_WAIT',
+      status: 'RESTARTING',
+      progressPercentage: null,
+    };
+    const health = progressEvent('rollback-1');
+    health.timestamp = '2026-07-28T10:02:00Z';
+    health.resources = { ...health.resources, phaseCode: 'HEALTH_VERIFYING', status: 'RESTARTING', progressPercentage: null };
+
+    const atStart = reduceOperationProgress(registered, starting);
+    const atMarkerWait = reduceOperationProgress(atStart, markerWait);
+    const atHealthCheck = reduceOperationProgress(atMarkerWait, health);
+
+    expect(atStart['rollback-1']?.progress).toMatchObject({ progressPercentage: 55, rollbackState: 'RESTORING' });
+    expect(atMarkerWait['rollback-1']?.progress).toMatchObject({ progressPercentage: 70, rollbackState: 'RESTORING' });
+    expect(atHealthCheck['rollback-1']?.progress).toMatchObject({ progressPercentage: 90, rollbackState: 'RESTORING' });
+    expect(
+      finishRegisteredOperationOnLifecycle(atHealthCheck, {
+        eventType: 'RESOURCE_ACTIVE',
+        deploymentId: 'rollback-1',
+        resourceKey: 'WILDFLY_PROFILE:profile-1',
+        resourceType: 'WILDFLY_PROFILE',
+        message: 'WildFly process is active',
+      }),
+    ).toBe(atHealthCheck);
+  });
+
+  it('records a failed WAR rollback marker result without promoting the profile to active', () => {
+    const registered = registerOperationInMap(
+      {},
+      { deploymentId: 'rollback-1', resourceType: 'WILDFLY_PROFILE', operationType: 'WAR_ROLLBACK' },
+      'WILDFLY_PROFILE:profile-1',
+      'Rollback WAR',
+    );
+    const markerWait = progressEvent('rollback-1');
+    markerWait.resources = {
+      ...markerWait.resources,
+      phaseCode: 'DEPLOYMENT_MARKER_WAIT',
+      status: 'RESTARTING',
+      progressPercentage: null,
+    };
+    const failed = progressEvent('rollback-1');
+    failed.timestamp = '2026-07-28T10:01:00Z';
+    failed.message = 'WildFly deployment marker failed. Stop WildFly and release the locked server.log before retrying.';
+    failed.resources = { ...failed.resources, phaseCode: 'FAILED', status: 'FAILED', progressPercentage: null };
+
+    const failure = reduceOperationProgress(reduceOperationProgress(registered, markerWait), failed);
+
+    expect(failure['rollback-1']?.progress).toMatchObject({
+      deploymentOutcome: 'FAILED',
+      rollbackState: 'FAILED',
+      failureMessage: failed.message,
+      rollbackFailureMessage: failed.message,
+      progressPercentage: 70,
+    });
+    expect(isOperationTerminal(failure['rollback-1'])).toBe(true);
   });
 
   it('applies OPERATION_FINISHED outcomes onto registered progress', () => {

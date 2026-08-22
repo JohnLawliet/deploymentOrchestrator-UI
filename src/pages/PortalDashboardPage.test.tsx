@@ -321,6 +321,23 @@ describe('PortalDashboardPage profile contract', () => {
     expect(screen.getByRole('button', { name: 'View output' })).toBeEnabled();
   });
 
+  it('opens available profile output without inventing a deployment ID', async () => {
+    const user = userEvent.setup();
+    api.getProfiles.mockResolvedValue([{ ...profile, activeOperationId: null, serverLogAvailable: true }]);
+    render(<PortalDashboardPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'View output' }));
+
+    expect(context.value!.setViewingOperation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deploymentId: '',
+        resourceKey: `WILDFLY_PROFILE:${profile.id}`,
+        resourceType: 'WILDFLY_PROFILE',
+        outputRequested: true,
+      }),
+    );
+  });
+
   it.each([
     ['INACTIVE', 'Start', false],
     ['STARTING', /Starting/, true],

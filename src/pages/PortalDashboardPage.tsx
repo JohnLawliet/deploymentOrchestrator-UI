@@ -214,7 +214,7 @@ export default function PortalDashboardPage() {
     const resourceKey = `${resolvedResourceType}:${activity.id}`;
     setViewingOperation({
       ...(deploymentId ? operations[deploymentId] || {} : {}),
-      deploymentId: deploymentId || resourceKey,
+      deploymentId: deploymentId || '',
       resourceKey,
       resourceType: resolvedResourceType,
       ...(resolvedResourceType === 'WILDFLY_PROFILE' ? { profileId: activity.id } : {}),
