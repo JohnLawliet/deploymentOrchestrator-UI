@@ -112,6 +112,7 @@ export default function OperationProgressPanel() {
     profileLogLines,
     clearProfileLogs,
     mergeActivity,
+    handleSessionRevoked,
   } = usePortal();
   const [actionState, setActionState] = useState('');
   const [actionError, setActionError] = useState('');
@@ -160,12 +161,11 @@ export default function OperationProgressPanel() {
   const complete = completed || failed || cancelled;
   const phaseCode =
     (statusTerminal || completed) && !rollbackRestoring && !rollbackRestored ? undefined : operationProgress?.phaseCode;
-  const progress =
-    completed
-      ? 100
-      : (failed && !rollbackRestoring && !rollbackRestored) || cancelled
-        ? undefined
-        : suppliedProgress;
+  const progress = completed
+    ? 100
+    : (failed && !rollbackRestoring && !rollbackRestored) || cancelled
+      ? undefined
+      : suppliedProgress;
   const progressWidth = Math.min(100, Math.max(0, progress ?? 0));
   const restoredState = live?.restoredResourceState;
   const message = rollbackRestoring
@@ -178,7 +178,7 @@ export default function OperationProgressPanel() {
         : 'Rollback failed. Manual recovery is required.'
       : rollbackRestored && deploymentFailed
         ? `Deployment failed. The previous deployment was restored${restoredState ? ` and the profile is ${restoredState.toLowerCase()}` : ''}.`
-      : manualWarRollback && completed
+        : manualWarRollback && completed
           ? 'Previous deployment restored successfully.'
           : (failed ? live?.message : undefined) ||
             operationProgress?.message ||
@@ -293,9 +293,14 @@ export default function OperationProgressPanel() {
     void fetchEventSource(terminalUrl, {
       method: 'GET',
       headers: techDriveHeaders(),
+      credentials: 'include',
       signal: controller.signal,
       openWhenHidden: true,
       onopen: async (response) => {
+        if (response.status === 401) {
+          handleSessionRevoked();
+          throw new Error('Portal session ended');
+        }
         if (!response.ok) throw new Error(`Terminal output stream returned ${response.status}`);
         if (!disposed) setConnection('connected');
       },
@@ -333,7 +338,7 @@ export default function OperationProgressPanel() {
       controller.abort();
       if (terminalSubscriptionRef.current?.controller === controller) terminalSubscriptionRef.current = null;
     };
-  }, [terminalOutput, live?.terminalEventsUrl, operationId, viewingOperation?.terminalEventsUrl]);
+  }, [handleSessionRevoked, terminalOutput, live?.terminalEventsUrl, operationId, viewingOperation?.terminalEventsUrl]);
 
   useEffect(() => {
     if (autoScroll && outputRef.current) {

@@ -98,7 +98,7 @@ export function allDuplicatesSelected(duplicateFiles: Record<string, string[]> =
 }
 
 export default function UatBuildPage() {
-  const { username, findConflictingLock, lastSystemEvent } = usePortal();
+  const { username, findConflictingLock, lastSystemEvent, handleSessionRevoked } = usePortal();
   const [activeStep, setActiveStep] = useState(1);
   const [applications, setApplications] = useState<Array<{ application: string; warFileName: string; environments: string[] }>>(
     [],
@@ -258,9 +258,14 @@ export default function UatBuildPage() {
     void fetchEventSource(uatBuildOperationEventUrl(operationId), {
       method: 'GET',
       headers: { ...techDriveHeaders(username), Accept: 'text/event-stream' },
+      credentials: 'include',
       signal: controller.signal,
       openWhenHidden: true,
       onopen: async (response) => {
+        if (response.status === 401) {
+          handleSessionRevoked();
+          throw new Error('Portal session ended');
+        }
         if (!response.ok) throw new Error(`UAT build event stream returned ${response.status}`);
         if (!disposed) {
           setConnectionState('connected');
@@ -309,7 +314,7 @@ export default function UatBuildPage() {
       disposed = true;
       controller.abort();
     };
-  }, [failOperation, finishOperation, operationId, streamRevision, username]);
+  }, [failOperation, finishOperation, handleSessionRevoked, operationId, streamRevision, username]);
 
   const releaseAndReset = useCallback((message = '') => {
     const currentLock = lockRef.current;

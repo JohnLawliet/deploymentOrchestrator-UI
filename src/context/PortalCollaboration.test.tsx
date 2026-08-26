@@ -7,14 +7,20 @@ import { frontendProfileActivity, jarProfileActivity, lockInfo, systemEvent, use
 
 type LockConflictHandler = (error: ApiRequestError) => void;
 type BackendUnavailableHandler = (error: ApiRequestError) => void;
+type SessionUnauthorizedHandler = (error: ApiRequestError) => void;
 
 const api = vi.hoisted(() => ({
   getLocks: vi.fn(),
+  getCurrentPortalSession: vi.fn(),
+  getPortalQueue: vi.fn(),
   getOperation: vi.fn(),
   getProfiles: vi.fn(),
   getRuntimeResource: vi.fn(),
   lockConflictHandler: null as LockConflictHandler | null,
   backendUnavailableHandler: null as BackendUnavailableHandler | null,
+  sessionUnauthorizedHandler: null as SessionUnauthorizedHandler | null,
+  logoutPortalSession: vi.fn(),
+  forceLogoutPortalUser: vi.fn(),
   reportUserActivity: vi.fn(),
   validateUser: vi.fn(),
 }));
@@ -25,6 +31,8 @@ vi.mock('@/lib/contractApi', () => ({
   BACKEND_OFFLINE_TOAST: 'The backend is offline.',
   eventUrl: (path: string) => `/deploymentOrchestrator/api${path}`,
   getLocks: api.getLocks,
+  getCurrentPortalSession: api.getCurrentPortalSession,
+  getPortalQueue: api.getPortalQueue,
   getOperation: api.getOperation,
   getProfiles: api.getProfiles,
   getRuntimeResource: api.getRuntimeResource,
@@ -41,8 +49,20 @@ vi.mock('@/lib/contractApi', () => ({
       api.lockConflictHandler = null;
     };
   },
+  onSessionUnauthorized: (handler: SessionUnauthorizedHandler) => {
+    api.sessionUnauthorizedHandler = handler;
+    return () => {
+      api.sessionUnauthorizedHandler = null;
+    };
+  },
+  logoutPortalSession: api.logoutPortalSession,
+  forceLogoutPortalUser: api.forceLogoutPortalUser,
   reportUserActivity: api.reportUserActivity,
-  techDriveHeaders: (username?: string) => (username ? { 'X-TechDrive-Username': username } : {}),
+  setApiAdmissionStatus: vi.fn(),
+  techDriveHeaders: (username?: string) => ({
+    ...(username ? { 'X-TechDrive-Username': username } : {}),
+    'X-Portal-Tab-Id': 'tab-test-1',
+  }),
   validateUser: api.validateUser,
 }));
 
@@ -58,12 +78,19 @@ function Harness() {
       <span data-testid="system-toasts">{portal.systemToasts.map((toast) => `${toast.variant}:${toast.message}`).join(',')}</span>
       <span data-testid="system-status">{portal.systemStatus}</span>
       <span data-testid="validated">{String(portal.validated)}</span>
+      <span data-testid="session-phase">{portal.sessionPhase}</span>
       <span data-testid="username">{portal.username}</span>
       <span data-testid="validation-error">{portal.validationError}</span>
       <span data-testid="frontend-profiles">{JSON.stringify(portal.frontendProfileActivityMap)}</span>
       <span data-testid="jar-profiles">{JSON.stringify(portal.jarProfileActivityMap)}</span>
       <button type="button" onClick={portal.reportInteraction}>
         Interact
+      </button>
+      <button type="button" onClick={portal.changeUser}>
+        Log out
+      </button>
+      <button type="button" onClick={() => void portal.acceptUser('John Smith')}>
+        Sign in
       </button>
     </div>
   );
@@ -122,7 +149,34 @@ const lockConflictError = (): ApiRequestError =>
 describe('PortalProvider collaboration contracts', () => {
   beforeEach(() => {
     sessionStorage.setItem('qc-deployment-username', 'John Smith');
-    api.validateUser.mockResolvedValue({});
+    api.getCurrentPortalSession.mockResolvedValue({
+      username: 'John Smith',
+      isAdmin: false,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 1,
+      queuePosition: null,
+    });
+    api.getPortalQueue.mockResolvedValue({
+      admissionStatus: 'QUEUED',
+      maxOnlineUsers: 5,
+      onlineCount: 5,
+      queuePosition: 1,
+      onlineUsers: [],
+    });
+    api.validateUser.mockResolvedValue({
+      valid: true,
+      normalizedUsername: 'John Smith',
+      isAdmin: false,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 1,
+      queuePosition: null,
+      onlineUsers: [],
+      notices: [],
+    });
+    api.logoutPortalSession.mockResolvedValue(undefined);
+    api.forceLogoutPortalUser.mockResolvedValue(undefined);
     api.getProfiles.mockResolvedValue([]);
     api.getLocks.mockResolvedValue([]);
     api.getRuntimeResource.mockResolvedValue(null);
@@ -136,13 +190,18 @@ describe('PortalProvider collaboration contracts', () => {
     sessionStorage.clear();
     vi.restoreAllMocks();
     api.getLocks.mockReset();
+    api.getCurrentPortalSession.mockReset();
+    api.getPortalQueue.mockReset();
     api.getOperation.mockReset();
     api.getProfiles.mockReset();
     api.getRuntimeResource.mockReset();
     api.reportUserActivity.mockReset();
+    api.logoutPortalSession.mockReset();
+    api.forceLogoutPortalUser.mockReset();
     api.validateUser.mockReset();
     api.lockConflictHandler = null;
     api.backendUnavailableHandler = null;
+    api.sessionUnauthorizedHandler = null;
     stream.fetchEventSource.mockReset();
     vi.useRealTimers();
   });
@@ -203,7 +262,7 @@ describe('PortalProvider collaboration contracts', () => {
       systemEvent({
         eventType: 'USER_PRESENCE_CHANGED',
         state: 'OFFLINE',
-        resources: userPresence({ username: 'Mary Smith', status: 'OFFLINE', revision: 9 }),
+        resources: userPresence({ username: 'Mary Smith', status: 'ACTIVE', revision: 9 }),
       }),
     );
     send(
@@ -310,9 +369,16 @@ describe('PortalProvider collaboration contracts', () => {
   });
 
   it('surfaces Tech Drive share notices as warning toasts without blocking login', async () => {
+    api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
     api.validateUser.mockResolvedValue({
       valid: true,
       normalizedUsername: 'johnsmith',
+      isAdmin: false,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 1,
+      queuePosition: null,
+      onlineUsers: [],
       notices: ['unable to access techdrive'],
     });
 
@@ -322,14 +388,23 @@ describe('PortalProvider collaboration contracts', () => {
       </PortalProvider>,
     );
 
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('anonymous'));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('true'));
     expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:unable to access techdrive');
   });
 
   it('surfaces Tech Drive directory-created notices as warning toasts', async () => {
+    api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
     api.validateUser.mockResolvedValue({
       valid: true,
       normalizedUsername: 'johnsmith',
+      isAdmin: false,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 1,
+      queuePosition: null,
+      onlineUsers: [],
       notices: ["directory isn't present so the directory with same name has been created"],
     });
 
@@ -339,6 +414,8 @@ describe('PortalProvider collaboration contracts', () => {
       </PortalProvider>,
     );
 
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('anonymous'));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('true'));
     expect(screen.getByTestId('system-toasts')).toHaveTextContent(
       "warning:directory isn't present so the directory with same name has been created",
@@ -346,7 +423,17 @@ describe('PortalProvider collaboration contracts', () => {
   });
 
   it('does not toast when validate notices are empty or omitted', async () => {
-    api.validateUser.mockResolvedValue({ valid: true, normalizedUsername: 'johnsmith' });
+    api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
+    api.validateUser.mockResolvedValue({
+      valid: true,
+      normalizedUsername: 'johnsmith',
+      isAdmin: false,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 1,
+      queuePosition: null,
+      onlineUsers: [],
+    });
 
     render(
       <PortalProvider>
@@ -354,11 +441,14 @@ describe('PortalProvider collaboration contracts', () => {
       </PortalProvider>,
     );
 
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('anonymous'));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('true'));
     expect(screen.getByTestId('system-toasts')).toBeEmptyDOMElement();
   });
 
   it('keeps login failed and skips notice toasts when validateUser rejects', async () => {
+    api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
     api.validateUser.mockRejectedValue(new Error('Unknown user.'));
 
     render(
@@ -367,6 +457,8 @@ describe('PortalProvider collaboration contracts', () => {
       </PortalProvider>,
     );
 
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('anonymous'));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('false'));
     expect(screen.getByTestId('validation-error')).toHaveTextContent('Unknown user.');
     expect(screen.getByTestId('system-toasts')).toBeEmptyDOMElement();
@@ -441,7 +533,7 @@ describe('PortalProvider collaboration contracts', () => {
     await waitFor(() => expect(api.getLocks).toHaveBeenCalledTimes(2));
   });
 
-  it('logs out after a connected stream drops instead of reconnecting', async () => {
+  it('keeps the portal session while a connected stream reconnects', async () => {
     render(
       <PortalProvider>
         <Harness />
@@ -459,14 +551,36 @@ describe('PortalProvider collaboration contracts', () => {
     expect(screen.getByTestId('system-status')).toHaveTextContent('connected');
 
     failStream(options);
-    expect(screen.getByTestId('system-status')).toHaveTextContent('disconnected');
-    expect(screen.getByTestId('validated')).toHaveTextContent('false');
-    expect(screen.getByTestId('username')).toBeEmptyDOMElement();
-    expect(sessionStorage.getItem('qc-deployment-username')).toBeNull();
+    expect(screen.getByTestId('system-status')).toHaveTextContent('reconnecting');
+    expect(screen.getByTestId('validated')).toHaveTextContent('true');
+    expect(screen.getByTestId('username')).toHaveTextContent('John Smith');
+    expect(sessionStorage.getItem('qc-deployment-username')).toBe('John Smith');
     expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:The backend is offline.');
   });
 
-  it('logs out and toasts when axios reports the backend unavailable', async () => {
+  it('closes the system stream synchronously on self-logout without reconnecting', async () => {
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(stream.fetchEventSource).toHaveBeenCalled());
+    const options = streamOptions();
+    await openStream(options);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
+
+    await waitFor(() => expect(options.signal?.aborted).toBe(true));
+    expect(api.logoutPortalSession).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.getByTestId('validated')).toHaveTextContent('false'));
+    expect(screen.getByTestId('username')).toBeEmptyDOMElement();
+    expect(sessionStorage.getItem('qc-deployment-username')).toBeNull();
+    expect(() => options.onclose?.()).not.toThrow();
+    expect(() => options.onerror?.(new Error('network'))).not.toThrow();
+    expect(stream.fetchEventSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the session and toasts when the backend is temporarily unavailable', async () => {
     render(
       <PortalProvider>
         <Harness />
@@ -476,14 +590,50 @@ describe('PortalProvider collaboration contracts', () => {
     const handler = api.backendUnavailableHandler;
     if (!handler) throw new Error('Expected a backend-unavailable handler.');
     act(() => handler(Object.assign(new Error('offline'), { status: 503, paths: [], users: [], details: null })));
-    expect(screen.getByTestId('validated')).toHaveTextContent('false');
-    expect(sessionStorage.getItem('qc-deployment-username')).toBeNull();
+    expect(screen.getByTestId('validated')).toHaveTextContent('true');
+    expect(sessionStorage.getItem('qc-deployment-username')).toBe('John Smith');
     expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:The backend is offline.');
   });
 
-  it('logs out from the liveness poll when validateUser returns 503', async () => {
+  it('treats the current user OFFLINE event as mandatory session revocation', async () => {
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(stream.fetchEventSource).toHaveBeenCalled());
+    const options = streamOptions();
+    send(
+      options,
+      systemEvent({
+        eventType: 'USER_PRESENCE_CHANGED',
+        username: 'john_smith',
+        state: 'OFFLINE',
+        resources: userPresence({ username: 'John Smith', status: 'ACTIVE', revision: 10 }),
+      }),
+    );
+    expect(screen.getByTestId('validated')).toHaveTextContent('false');
+    expect(screen.getByTestId('username')).toBeEmptyDOMElement();
+    expect(options.signal?.aborted).toBe(true);
+  });
+
+  it('polls only while queued and admits the user when the queue response changes', async () => {
     vi.useFakeTimers();
-    const unavailable = Object.assign(new Error('offline'), { status: 503, paths: [], users: [], details: null });
+    api.getCurrentPortalSession.mockResolvedValueOnce({
+      username: 'John Smith',
+      isAdmin: false,
+      admissionStatus: 'QUEUED',
+      maxOnlineUsers: 5,
+      onlineCount: 5,
+      queuePosition: 2,
+    });
+    api.getPortalQueue.mockResolvedValueOnce({
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 5,
+      queuePosition: null,
+      onlineUsers: [],
+    });
     render(
       <PortalProvider>
         <Harness />
@@ -491,14 +641,15 @@ describe('PortalProvider collaboration contracts', () => {
     );
     await act(async () => {
       await Promise.resolve();
-    });
-    expect(screen.getByTestId('validated')).toHaveTextContent('true');
-    api.validateUser.mockRejectedValue(unavailable);
-    await act(async () => {
-      vi.advanceTimersByTime(15000);
       await Promise.resolve();
     });
-    expect(screen.getByTestId('validated')).toHaveTextContent('false');
-    expect(screen.getByTestId('system-toasts')).toHaveTextContent('warning:The backend is offline.');
+    expect(screen.getByTestId('session-phase')).toHaveTextContent('queued');
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.getPortalQueue).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('session-phase')).toHaveTextContent('admitted');
   });
 });

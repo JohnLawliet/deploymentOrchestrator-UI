@@ -46,7 +46,9 @@ import {
   executeUpload,
   getDatabaseTableRows,
   getDatabaseTables,
+  getCurrentPortalSession,
   getLocks,
+  getPortalQueue,
   getJarSnapshots,
   getUpload,
   getProfiles,
@@ -57,7 +59,10 @@ import {
   isBackendUnavailable,
   onLockConflict,
   onBackendUnavailable,
+  onSessionUnauthorized,
   reportUserActivity,
+  forceLogoutPortalUser,
+  logoutPortalSession,
   resolvedTerminalEventUrl,
   rollbackJar,
   rollbackUploadItem,
@@ -185,6 +190,7 @@ describe('presence and lock contracts', () => {
 describe('executeDatabaseQuery', () => {
   beforeEach(() => {
     sessionStorage.removeItem('qc-deployment-username');
+    sessionStorage.setItem('qc-portal-tab-id', 'tab-test-1');
     client.request.mockReset();
     client.request.mockResolvedValue({ data: { success: true } });
     client.get.mockReset();
@@ -199,14 +205,14 @@ describe('executeDatabaseQuery', () => {
     sessionStorage.setItem('qc-deployment-username', ' deploy-user ');
 
     expect(requestHandler()({ headers: {} })).toEqual({
-      headers: { 'X-TechDrive-Username': 'deploy-user' },
+      headers: { 'X-TechDrive-Username': 'deploy-user', 'X-Portal-Tab-Id': 'tab-test-1' },
     });
   });
 
   it('does not add the TechDrive username header when no user is stored', () => {
     sessionStorage.removeItem('qc-deployment-username');
 
-    expect(requestHandler()({ headers: {} })).toEqual({ headers: {} });
+    expect(requestHandler()({ headers: {} })).toEqual({ headers: { 'X-Portal-Tab-Id': 'tab-test-1' } });
   });
 
   it('validates with the candidate username header and no query parameter', async () => {
@@ -214,6 +220,12 @@ describe('executeDatabaseQuery', () => {
       data: {
         valid: true,
         normalizedUsername: 'candidate-user',
+        isAdmin: false,
+        admissionStatus: 'ADMITTED',
+        maxOnlineUsers: 5,
+        onlineCount: 1,
+        queuePosition: null,
+        onlineUsers: [],
         notices: ['unable to access techdrive'],
       },
       headers: {},
@@ -222,12 +234,42 @@ describe('executeDatabaseQuery', () => {
     await expect(validateUser(' candidate-user ')).resolves.toEqual({
       valid: true,
       normalizedUsername: 'candidate-user',
+      isAdmin: false,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 1,
+      queuePosition: null,
+      onlineUsers: [],
       notices: ['unable to access techdrive'],
     });
 
     expect(client.get).toHaveBeenCalledWith('/users/validate', {
-      headers: { 'X-TechDrive-Username': 'candidate-user' },
+      headers: { 'X-TechDrive-Username': 'candidate-user', 'X-Portal-Tab-Id': 'tab-test-1' },
     });
+  });
+
+  it('uses cookie-session endpoints and reports authenticated 401 responses', async () => {
+    const unauthorized = vi.fn();
+    const unsubscribe = onSessionUnauthorized(unauthorized);
+    client.get
+      .mockResolvedValueOnce({ data: { username: 'alice', admissionStatus: 'ADMITTED' } })
+      .mockResolvedValueOnce({ data: { admissionStatus: 'QUEUED', queuePosition: 2, onlineUsers: [] } });
+    client.post.mockResolvedValue({ data: undefined });
+
+    await getCurrentPortalSession();
+    await getPortalQueue();
+    await logoutPortalSession();
+    await forceLogoutPortalUser('bob/example');
+
+    expect(client.get).toHaveBeenNthCalledWith(1, '/users/me');
+    expect(client.get).toHaveBeenNthCalledWith(2, '/users/queue');
+    expect(client.post).toHaveBeenCalledWith('/users/logout');
+    expect(client.post).toHaveBeenCalledWith('/users/bob%2Fexample/force-logout');
+
+    client.post.mockRejectedValueOnce({ response: { status: 401, data: { message: 'Ended', code: 'SESSION_ENDED' } } });
+    await expect(reportUserActivity()).rejects.toMatchObject({ status: 401 });
+    expect(unauthorized).toHaveBeenCalledOnce();
+    unsubscribe();
   });
 
   it('executes a DELETE descriptor using its metadata-provided parameters', async () => {

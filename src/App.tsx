@@ -11,6 +11,7 @@ import DownloadsPage from '@/pages/DownloadsPage';
 import TablesPage from '@/pages/TablesPage';
 import UatBuildPage from '@/pages/UatBuildPage';
 import UploadPage from '@/pages/UploadPage';
+import QueuePage from '@/pages/QueuePage';
 import { usePortal } from '@/context/PortalContext';
 
 type RedirectState = {
@@ -46,10 +47,12 @@ function ValidationScreen() {
 }
 
 function LoginRoute() {
-  const { validated } = usePortal();
+  const { sessionPhase } = usePortal();
   const location = useLocation();
 
-  if (validated) return <Navigate to={destinationFrom(location.state) || '/dashboard'} replace />;
+  if (sessionPhase === 'restoring' || sessionPhase === 'validating') return <ValidationScreen />;
+  if (sessionPhase === 'queued') return <Navigate to="/queue" replace />;
+  if (sessionPhase === 'admitted') return <Navigate to={destinationFrom(location.state) || '/dashboard'} replace />;
   return (
     <>
       <UsernameGate />
@@ -59,27 +62,34 @@ function LoginRoute() {
 }
 
 function ProtectedRoute() {
-  const { validated, username, validationState } = usePortal();
+  const { sessionPhase } = usePortal();
   const location = useLocation();
-  const restoring = Boolean(username) && !validated && validationState !== 'invalid';
 
-  if (validated) return <Outlet />;
-  if (restoring) return <ValidationScreen />;
+  if (sessionPhase === 'admitted') return <Outlet />;
+  if (sessionPhase === 'queued') return <Navigate to="/queue" replace />;
+  if (sessionPhase === 'restoring' || sessionPhase === 'validating' || sessionPhase === 'loggingOut') return <ValidationScreen />;
   return <Navigate to="/" replace state={{ from: location }} />;
 }
 
-function UnknownRoute() {
-  const { validated, username, validationState } = usePortal();
-  const restoring = Boolean(username) && !validated && validationState !== 'invalid';
+function QueueRoute() {
+  const { sessionPhase } = usePortal();
+  if (sessionPhase === 'queued' || sessionPhase === 'loggingOut') return <QueuePage />;
+  if (sessionPhase === 'admitted') return <Navigate to="/dashboard" replace />;
+  if (sessionPhase === 'restoring' || sessionPhase === 'validating') return <ValidationScreen />;
+  return <Navigate to="/" replace />;
+}
 
-  if (restoring) return <ValidationScreen />;
-  return <Navigate to={validated ? '/dashboard' : '/'} replace />;
+function UnknownRoute() {
+  const { sessionPhase } = usePortal();
+  if (sessionPhase === 'restoring' || sessionPhase === 'validating') return <ValidationScreen />;
+  return <Navigate to={sessionPhase === 'admitted' ? '/dashboard' : sessionPhase === 'queued' ? '/queue' : '/'} replace />;
 }
 
 export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<LoginRoute />} />
+      <Route path="queue" element={<QueueRoute />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
           <Route path="dashboard" element={<PortalDashboardPage />} />

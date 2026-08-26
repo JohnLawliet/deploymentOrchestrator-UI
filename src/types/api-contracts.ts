@@ -14,10 +14,12 @@ export type ResourceState = 'INACTIVE' | 'STARTING' | 'ACTIVE' | 'STOPPING' | 'D
 export type ProfileHealth = 'FUNCTIONAL' | 'MISSING' | 'NOT_FUNCTIONAL';
 export type RuntimeReadiness = 'NOT_VERIFIED' | 'PORT_VERIFIED' | 'HTTP_VERIFIED';
 export type RootKey = 'qc' | 'techDrive' | 'jenkinsBuild';
+export type AdmissionStatus = 'QUEUED' | 'ADMITTED';
 
 /** Required for every REST and SSE request except where noted otherwise. */
 export interface ApiHeaders {
   'X-TechDrive-Username': string;
+  'X-Portal-Tab-Id': string;
 }
 
 export interface ApiError {
@@ -34,7 +36,29 @@ export interface ApiError {
 export interface UserValidationResponse {
   valid: boolean;
   normalizedUsername: string;
+  isAdmin: boolean;
+  admissionStatus: AdmissionStatus;
+  maxOnlineUsers: number;
+  onlineCount: number;
+  queuePosition: number | null;
+  onlineUsers: UserPresence[];
   notices: string[];
+}
+export interface PortalSessionResponse {
+  username: string;
+  isAdmin: boolean;
+  admissionStatus: AdmissionStatus;
+  maxOnlineUsers: number;
+  onlineCount: number;
+  queuePosition: number | null;
+  onlineUsers?: UserPresence[];
+}
+export interface PortalQueueResponse {
+  admissionStatus: AdmissionStatus;
+  maxOnlineUsers: number;
+  onlineCount: number;
+  queuePosition: number | null;
+  onlineUsers: UserPresence[];
 }
 export interface FileRoot {
   key: RootKey;
@@ -625,7 +649,11 @@ export type UatSseEventName = 'UAT_BUILD_RUNNING' | 'UAT_BUILD_COMPLETED' | 'UAT
 export interface ApiRoutes {
   'GET /api/test': { headers: { Authorization: string }; response: string };
   'GET /api/users/validate': { response: UserValidationResponse };
+  'GET /api/users/me': { response: PortalSessionResponse };
+  'GET /api/users/queue': { response: PortalQueueResponse };
   'POST /api/users/activity': { response: void; status: 204 };
+  'POST /api/users/logout': { response: void; status: 204 };
+  'POST /api/users/{username}/force-logout': { path: { username: string }; response: void; status: 204 };
   'GET /api/files/roots': { response: FileRoot[] };
   'GET /api/files/list': { query: { rootKey: RootKey; path?: string }; response: FileNode[] };
   'GET /api/files/download': { query: { rootKey: RootKey; path: string }; response: Blob };

@@ -4,13 +4,20 @@ import type { EventSourceMessage } from '@microsoft/fetch-event-source';
 import {
   BACKEND_OFFLINE_TOAST,
   eventUrl,
+  forceLogoutPortalUser,
+  getCurrentPortalSession,
   getLocks,
+  getOperation,
+  getPortalQueue,
   getProfiles,
   getRuntimeResource,
   isBackendUnavailable,
+  logoutPortalSession,
   onBackendUnavailable,
   onLockConflict,
+  onSessionUnauthorized,
   reportUserActivity,
+  setApiAdmissionStatus,
   techDriveHeaders,
   validateUser,
 } from '@/lib/contractApi';
@@ -34,11 +41,13 @@ import {
   registerOperationInMap,
 } from '@/lib/operationProgress';
 import { getStoredPortalUsername, PORTAL_USERNAME_SESSION_KEY } from '@/lib/portalSession';
+import { useWarDeployStore } from '@/warDeployStore';
 import { UPLOAD_EVENT_TYPES } from '@/lib/uploadContract';
 import { formatCompletionNotification } from '@/lib/operationNotifications';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import type {
   FrontendProfileActivity,
+  AdmissionStatus,
   LockInfo,
   Profile,
   SystemEvent,
@@ -48,6 +57,7 @@ import type {
   JarProfileActivity,
   ProfileLogEvent,
   RuntimeResource,
+  PortalSessionResponse,
 } from '@/types/api-contracts';
 import type {
   FrontendProfileActivityModel,
@@ -68,15 +78,25 @@ type ActivityMaps = {
 type RuntimeActivity = RuntimeActivityModel;
 type LockScope = { resourceKey?: string; section?: string; profile?: string; mode?: 'READ' | 'WRITE' };
 export type PortalEvent = SystemEvent | ProfileLogEvent;
+type StoredPortalOperation = { deploymentId: string; resourceKey: string; label: string };
 type ValidationState = 'idle' | 'validating' | 'valid' | 'invalid';
 type SystemStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+export type PortalSessionPhase = 'restoring' | 'anonymous' | 'validating' | 'queued' | 'admitted' | 'loggingOut';
 type PortalContextValue = ActivityMaps & {
   username: string;
+  sessionPhase: PortalSessionPhase;
   validated: boolean;
+  isAdmin: boolean;
+  admissionStatus: AdmissionStatus | null;
+  maxOnlineUsers: number;
+  onlineCount: number;
+  queuePosition: number | null;
   validationState: ValidationState;
   validationError: string;
   acceptUser: (username: string) => Promise<boolean>;
-  changeUser: () => void;
+  changeUser: () => Promise<void>;
+  handleSessionRevoked: () => void;
+  forceLogoutUser: (username: string) => Promise<boolean>;
   mergeActivity: (activity: Partial<RuntimeActivityModel> & { id?: string }, resourceType?: string | null) => void;
   replaceProfileActivities: (profiles: Profile[]) => RuntimeActivityModel[];
   reconcileProfileActivity: (profileId?: string) => Promise<RuntimeActivityModel | RuntimeActivityModel[] | null>;
@@ -178,6 +198,37 @@ const eventStatuses = {
 };
 const resourceStates = new Set(['INACTIVE', 'STARTING', 'ACTIVE', 'STOPPING', 'DEPLOYING', 'FAILED']);
 const systemEventScopes = new Set<SystemEvent['scope']>(['SYSTEM', 'RESOURCE', 'USER', 'OPERATION']);
+const storedOperationKey = (username: string) => `portal-running-operations:${normalizeUsername(username)}`;
+const readStoredOperations = (username: string): StoredPortalOperation[] => {
+  if (!username || typeof sessionStorage === 'undefined') return [];
+  try {
+    const parsed: unknown = JSON.parse(sessionStorage.getItem(storedOperationKey(username)) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is StoredPortalOperation =>
+        isRecord(item) &&
+        typeof item.deploymentId === 'string' &&
+        typeof item.resourceKey === 'string' &&
+        typeof item.label === 'string',
+    );
+  } catch {
+    return [];
+  }
+};
+const writeStoredOperations = (username: string, operations: StoredPortalOperation[]) => {
+  if (!username || typeof sessionStorage === 'undefined') return;
+  if (operations.length) sessionStorage.setItem(storedOperationKey(username), JSON.stringify(operations.slice(-20)));
+  else sessionStorage.removeItem(storedOperationKey(username));
+};
+const rememberStoredOperation = (username: string, operation: StoredPortalOperation) => {
+  const current = readStoredOperations(username).filter((item) => item.deploymentId !== operation.deploymentId);
+  writeStoredOperations(username, [...current, operation]);
+};
+const forgetStoredOperation = (username: string, deploymentId: string) =>
+  writeStoredOperations(
+    username,
+    readStoredOperations(username).filter((item) => item.deploymentId !== deploymentId),
+  );
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const isNullableString = (value: unknown): value is string | null => value == null || typeof value === 'string';
@@ -500,8 +551,14 @@ export function mergeActivityMap(map: Record<string, RuntimeActivity>, event: Sy
 
 export function PortalProvider({ children }: { children: ReactNode }) {
   const [username, setUsername] = useState<string>(getStoredPortalUsername);
+  const [sessionPhase, setSessionPhase] = useState<PortalSessionPhase>('restoring');
   const [validated, setValidated] = useState(false);
-  const [validationState, setValidationState] = useState<ValidationState>(username ? 'validating' : 'idle');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [admissionStatus, setAdmissionStatus] = useState<AdmissionStatus | null>(null);
+  const [maxOnlineUsers, setMaxOnlineUsers] = useState(0);
+  const [onlineCount, setOnlineCount] = useState(0);
+  const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [validationState, setValidationState] = useState<ValidationState>('idle');
   const [validationError, setValidationError] = useState('');
   const [activityMaps, setActivityMaps] = useState<ActivityMaps>({
     wildflyProfileActivityMap: {},
@@ -526,7 +583,11 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const lockLabelsRef = useRef<Record<string, string>>({});
   const lockLabelOrderRef = useRef<string[]>([]);
   const systemToastSequenceRef = useRef(0);
-  const validatedRef = useRef(validated);
+  const systemEventControllerRef = useRef<AbortController | null>(null);
+  const intentionalSystemSseCloseRef = useRef(false);
+  const restorationStartedRef = useRef(false);
+  const operationRestoreKeyRef = useRef('');
+  const sessionPhaseRef = useRef(sessionPhase);
   useEffect(() => {
     mapsRef.current = activityMaps;
   }, [activityMaps]);
@@ -537,8 +598,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     viewingOperationRef.current = viewingOperation;
   }, [viewingOperation]);
   useEffect(() => {
-    validatedRef.current = validated;
-  }, [validated]);
+    sessionPhaseRef.current = sessionPhase;
+  }, [sessionPhase]);
   const updateOperations = useCallback((updater: OperationMap | ((current: OperationMap) => OperationMap)) => {
     setOperations((current) => {
       const next = typeof updater === 'function' ? updater(current) : updater;
@@ -645,10 +706,47 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setProfileLogLines((current) => ({ ...current, [profileId]: [] }));
   }, []);
 
-  const changeUser = useCallback(() => {
+  const closeSystemEventStream = useCallback(() => {
+    intentionalSystemSseCloseRef.current = true;
+    const controller = systemEventControllerRef.current;
+    systemEventControllerRef.current = null;
+    controller?.abort();
+  }, []);
+
+  const applyPortalSession = useCallback(
+    (response: PortalSessionResponse | Awaited<ReturnType<typeof getPortalQueue>>, fallbackUsername = '') => {
+      const canonicalUsername = String(('username' in response ? response.username : '') || fallbackUsername).trim();
+      if (!canonicalUsername) throw new Error('The backend did not return a portal username.');
+      sessionStorage.setItem(PORTAL_USERNAME_SESSION_KEY, canonicalUsername);
+      setUsername(canonicalUsername);
+      if ('isAdmin' in response) setIsAdmin(response.isAdmin === true);
+      setAdmissionStatus(response.admissionStatus);
+      setApiAdmissionStatus(response.admissionStatus);
+      setMaxOnlineUsers(Number(response.maxOnlineUsers) || 0);
+      setOnlineCount(Number(response.onlineCount) || 0);
+      setQueuePosition(response.queuePosition ?? null);
+      if (Array.isArray(response.onlineUsers)) setPresenceState(replacePresence(response.onlineUsers));
+      const admitted = response.admissionStatus === 'ADMITTED';
+      setValidated(admitted);
+      setSessionPhase(admitted ? 'admitted' : 'queued');
+      setValidationState('valid');
+      setValidationError('');
+    },
+    [],
+  );
+
+  const clearPortalSession = useCallback(() => {
+    closeSystemEventStream();
     sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
+    useWarDeployStore.getState().resetWarDeployment();
     setValidated(false);
     setUsername('');
+    setIsAdmin(false);
+    setAdmissionStatus(null);
+    setApiAdmissionStatus(null);
+    setMaxOnlineUsers(0);
+    setOnlineCount(0);
+    setQueuePosition(null);
     setActivityMaps({ wildflyProfileActivityMap: {}, jarProfileActivityMap: {}, frontendProfileActivityMap: {} });
     updateOperations({});
     setViewingOperation(null);
@@ -658,18 +756,37 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setOperationToasts([]);
     setSystemToasts([]);
     completionKeysRef.current = [];
+    operationRestoreKeyRef.current = '';
     lastActivityReportRef.current = null;
     lockLabelsRef.current = {};
     lockLabelOrderRef.current = [];
     setValidationState('idle');
+    setValidationError('');
+    setSessionPhase('anonymous');
     setSystemStatus('disconnected');
     setSnapshotRevision(0);
-  }, [setViewingOperation, updateOperations]);
+  }, [closeSystemEventStream, setViewingOperation, updateOperations]);
+
+  const changeUser = useCallback(async () => {
+    if (sessionPhaseRef.current === 'loggingOut' || sessionPhaseRef.current === 'anonymous') return;
+    setSessionPhase('loggingOut');
+    try {
+      await logoutPortalSession();
+      clearPortalSession();
+    } catch (error) {
+      if ((error as { status?: number })?.status === 401) {
+        clearPortalSession();
+        return;
+      }
+      setSessionPhase(admissionStatus === 'ADMITTED' ? 'admitted' : 'queued');
+      showSystemToast(errorMessage(error, 'Unable to log out.'), 'warning');
+    }
+  }, [admissionStatus, clearPortalSession, showSystemToast]);
 
   const handleBackendUnavailable = useCallback(() => {
-    if (validatedRef.current) changeUser();
     showSystemToast(BACKEND_OFFLINE_TOAST, 'warning');
-  }, [changeUser, showSystemToast]);
+    if (sessionPhaseRef.current === 'queued' || sessionPhaseRef.current === 'admitted') setSystemStatus('reconnecting');
+  }, [showSystemToast]);
 
   const acceptUser = useCallback(
     async (candidate: string): Promise<boolean> => {
@@ -679,34 +796,61 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         return false;
       }
       setValidationState('validating');
+      setSessionPhase('validating');
       setValidationError('');
       try {
         const response = await validateUser(entered);
+        if (!response.valid) throw new Error('This username is not permitted to use the portal.');
         for (const notice of response.notices ?? []) {
           showSystemToast(notice, 'warning');
         }
-        sessionStorage.setItem(PORTAL_USERNAME_SESSION_KEY, entered);
-        setUsername(entered);
-        setValidated(true);
-        setValidationState('valid');
+        applyPortalSession({ ...response, username: response.normalizedUsername }, entered);
         return true;
       } catch (error) {
         sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
         setValidated(false);
+        setUsername('');
+        setSessionPhase('anonymous');
         setValidationState('invalid');
         setValidationError(errorMessage(error, 'Unable to validate username.'));
         return false;
       }
     },
-    [showSystemToast],
+    [applyPortalSession, showSystemToast],
   );
 
   useEffect(() => {
-    if (username && !validated) acceptUser(username);
-  }, [acceptUser, username, validated]);
+    if (restorationStartedRef.current) return;
+    restorationStartedRef.current = true;
+    getCurrentPortalSession()
+      .then((response) => applyPortalSession(response, getStoredPortalUsername()))
+      .catch((error) => {
+        sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
+        setUsername('');
+        setValidated(false);
+        setSessionPhase('anonymous');
+        setValidationState('idle');
+        if ((error as { status?: number })?.status !== 401 && isBackendUnavailable(error)) {
+          showSystemToast(BACKEND_OFFLINE_TOAST, 'warning');
+        }
+      });
+  }, [applyPortalSession, showSystemToast]);
 
   useEffect(() => {
-    if (!validated || !username) return undefined;
+    if (sessionPhase !== 'queued') return undefined;
+    const refreshQueue = () => {
+      getPortalQueue()
+        .then((response) => applyPortalSession(response, username))
+        .catch((error) => {
+          if ((error as { status?: number })?.status !== 401 && isBackendUnavailable(error)) handleBackendUnavailable();
+        });
+    };
+    const timer = window.setInterval(refreshQueue, 5000);
+    return () => window.clearInterval(timer);
+  }, [applyPortalSession, handleBackendUnavailable, sessionPhase, username]);
+
+  useEffect(() => {
+    if (!admissionStatus || !username) return undefined;
     const pointerOptions: AddEventListenerOptions = { passive: true };
     const visible = () => {
       if (document.visibilityState === 'visible') reportInteraction();
@@ -723,14 +867,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('focus', reportInteraction);
       document.removeEventListener('visibilitychange', visible);
     };
-  }, [reportInteraction, username, validated]);
+  }, [admissionStatus, reportInteraction, username]);
 
   useEffect(() => {
-    if (!validated) return undefined;
+    if (sessionPhase !== 'admitted') return undefined;
     return onLockConflict(() => {
       reconcileLocks().catch(() => {});
     });
-  }, [reconcileLocks, validated]);
+  }, [reconcileLocks, sessionPhase]);
 
   useEffect(() => {
     return onBackendUnavailable(() => {
@@ -739,14 +883,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   }, [handleBackendUnavailable]);
 
   useEffect(() => {
-    if (!validated || !username) return undefined;
-    const timer = window.setInterval(() => {
-      validateUser(username).catch((error) => {
-        if (isBackendUnavailable(error)) handleBackendUnavailable();
-      });
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [handleBackendUnavailable, username, validated]);
+    return onSessionUnauthorized(() => clearPortalSession());
+  }, [clearPortalSession]);
 
   useEffect(() => {
     const expiries = Object.values(lockState.locks)
@@ -759,13 +897,16 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   }, [lockState.locks]);
 
   useEffect(() => {
-    if (!validated || !username) return undefined;
+    if ((sessionPhase !== 'queued' && sessionPhase !== 'admitted') || !username) return undefined;
     let opened = false;
+    let sessionEnded = false;
     const controller = new AbortController();
+    intentionalSystemSseCloseRef.current = false;
+    systemEventControllerRef.current = controller;
     setSystemStatus('connecting');
     const handleOpen = () => {
       setSystemStatus('connected');
-      if (opened) {
+      if (opened && sessionPhase === 'admitted') {
         reconcileLocks().catch(() => {});
       }
       opened = true;
@@ -825,6 +966,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (event.eventType === 'USER_PRESENCE_CHANGED') {
+          const presenceUsername = event.resources?.username || event.username;
+          const presenceStatus = String(event.state || event.resources?.status || '').toUpperCase();
+          if (presenceStatus === 'OFFLINE' && normalizeUsername(presenceUsername) === normalizeUsername(username)) {
+            sessionEnded = true;
+            clearPortalSession();
+            return;
+          }
           setPresenceState((current) => reducePresence(current, event));
           return;
         }
@@ -836,6 +984,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (event.eventType === 'OPERATION_FINISHED') {
           const details = event.resources || {};
           const operationId = String(details.operationId || event.deploymentId || '');
+          if (operationId) forgetStoredOperation(username, operationId);
           const outcome = details.outcome || event.state;
           const key = `${operationId}:${outcome}`;
           const section = String(details.section || '').toUpperCase();
@@ -953,12 +1102,13 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             ? deploymentId
             : '';
         updateOperations((current) => {
-          const merged = trackedLifecycleOperationId && current[trackedLifecycleOperationId]
-            ? {
-                ...current,
-                [trackedLifecycleOperationId]: mergeOperationEventRecord(current[trackedLifecycleOperationId], event),
-              }
-            : current;
+          const merged =
+            trackedLifecycleOperationId && current[trackedLifecycleOperationId]
+              ? {
+                  ...current,
+                  [trackedLifecycleOperationId]: mergeOperationEventRecord(current[trackedLifecycleOperationId], event),
+                }
+              : current;
           return finishRegisteredOperationOnLifecycle(merged, event);
         });
       } catch {
@@ -969,45 +1119,45 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     void fetchEventSource(eventUrl('/system/events'), {
       method: 'GET',
       headers: techDriveHeaders(username),
+      credentials: 'include',
       signal: controller.signal,
       openWhenHidden: true,
       onopen: async (response) => {
+        if (response.status === 401) {
+          sessionEnded = true;
+          clearPortalSession();
+          throw new Error('Portal session ended');
+        }
         if (!response.ok) throw new Error(`System event stream returned ${response.status}`);
         handleOpen();
       },
       onmessage: handleMessage,
       onclose: () => {
-        if (controller.signal.aborted) return;
-        if (opened) {
-          handleBackendUnavailable();
-          throw new Error('System event stream closed');
-        }
+        if (intentionalSystemSseCloseRef.current || controller.signal.aborted) return;
+        handleBackendUnavailable();
         setSystemStatus('reconnecting');
         throw new Error('System event stream closed');
       },
       onerror: () => {
-        if (controller.signal.aborted) return;
-        if (opened) {
-          handleBackendUnavailable();
-          throw new Error('System event stream disconnected');
-        }
+        if (intentionalSystemSseCloseRef.current || controller.signal.aborted) return;
+        if (sessionEnded) throw new Error('Portal session ended');
+        handleBackendUnavailable();
         setSystemStatus('reconnecting');
         return 3000;
       },
     }).catch(() => {
-      if (controller.signal.aborted) return;
-      if (opened) {
-        handleBackendUnavailable();
-        return;
-      }
+      if (controller.signal.aborted || sessionEnded) return;
       setSystemStatus('reconnecting');
     });
-    return () => controller.abort();
+    return () => {
+      if (systemEventControllerRef.current === controller) systemEventControllerRef.current = null;
+      controller.abort();
+    };
   }, [
-    changeUser,
+    clearPortalSession,
     handleBackendUnavailable,
+    sessionPhase,
     username,
-    validated,
     reconcileLocks,
     reconcileProfileActivity,
     reconcileResourceActivity,
@@ -1028,6 +1178,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         label,
         registered: true,
       };
+      if (record.deploymentId) {
+        rememberStoredOperation(username, { deploymentId: record.deploymentId, resourceKey, label });
+      }
       updateOperations((current) => registerOperationInMap(current, record, resourceKey, label));
       setViewingOperation(record);
       return record;
@@ -1035,7 +1188,64 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     [setViewingOperation, updateOperations, username],
   );
 
+  useEffect(() => {
+    if (sessionPhase !== 'admitted' || !username) return;
+    const restoreKey = storedOperationKey(username);
+    if (operationRestoreKeyRef.current === restoreKey) return;
+    operationRestoreKeyRef.current = restoreKey;
+    for (const stored of readStoredOperations(username)) {
+      getOperation(stored.deploymentId)
+        .then((operation) => {
+          const status = String(operation.status || '').toUpperCase();
+          if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(status)) {
+            forgetStoredOperation(username, stored.deploymentId);
+            return;
+          }
+          const record: OperationRecord = {
+            ...operation,
+            username,
+            initiatedByCurrentSession: true,
+            deploymentId: stored.deploymentId,
+            resourceKey: stored.resourceKey,
+            label: stored.label,
+            registered: true,
+          };
+          updateOperations((current) => registerOperationInMap(current, record, stored.resourceKey, stored.label));
+          setViewingOperation((current) => current || record);
+        })
+        .catch((error) => {
+          if ([403, 404, 410].includes(Number((error as { status?: number })?.status))) {
+            forgetStoredOperation(username, stored.deploymentId);
+          }
+        });
+    }
+  }, [sessionPhase, setViewingOperation, updateOperations, username]);
+
   const onlineUsers = useMemo(() => sortOnlineUsers(presenceState.users, username), [presenceState.users, username]);
+  const forceLogoutUser = useCallback(
+    async (targetUsername: string): Promise<boolean> => {
+      if (sessionPhase !== 'admitted' || !isAdmin || normalizeUsername(targetUsername) === normalizeUsername(username)) {
+        return false;
+      }
+      try {
+        await forceLogoutPortalUser(targetUsername);
+        setPresenceState((current) => {
+          const key = normalizeUsername(targetUsername);
+          if (!current.users[key]) return current;
+          const users = { ...current.users };
+          delete users[key];
+          return { ...current, users };
+        });
+        showSystemToast(`${targetUsername} was logged out.`, 'success');
+        return true;
+      } catch (error) {
+        if ((error as { status?: number })?.status === 403) setIsAdmin(false);
+        showSystemToast(errorMessage(error, `Unable to force logout ${targetUsername}.`), 'warning');
+        return false;
+      }
+    },
+    [isAdmin, sessionPhase, showSystemToast, username],
+  );
   const findConflictingLock = useCallback(
     (scopes: LockScope | LockScope[]) => findLockConflict(lockState.locks, username, scopes),
     [lockState.locks, username],
@@ -1044,11 +1254,19 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const value = useMemo<PortalContextValue>(
     () => ({
       username,
+      sessionPhase,
       validated,
+      isAdmin,
+      admissionStatus,
+      maxOnlineUsers,
+      onlineCount,
+      queuePosition,
       validationState,
       validationError,
       acceptUser,
       changeUser,
+      handleSessionRevoked: clearPortalSession,
+      forceLogoutUser,
       ...activityMaps,
       mergeActivity,
       replaceProfileActivities,
@@ -1075,11 +1293,19 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     }),
     [
       username,
+      sessionPhase,
       validated,
+      isAdmin,
+      admissionStatus,
+      maxOnlineUsers,
+      onlineCount,
+      queuePosition,
       validationState,
       validationError,
       acceptUser,
       changeUser,
+      clearPortalSession,
+      forceLogoutUser,
       activityMaps,
       mergeActivity,
       replaceProfileActivities,

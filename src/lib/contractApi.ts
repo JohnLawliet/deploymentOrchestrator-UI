@@ -1,8 +1,9 @@
 import axios from 'axios';
 import type { AxiosResponse } from 'axios';
-import { getStoredPortalUsername } from '@/lib/portalSession';
+import { getPortalTabId, getStoredPortalUsername } from '@/lib/portalSession';
 import type {
   ActivityCheckRequest,
+  AdmissionStatus,
   ApiError,
   ApiHeaders,
   ApiRoutes,
@@ -69,11 +70,25 @@ const apiBaseUrl = `${backendOrigin}${apiContextPath}/api`;
 export const BACKEND_OFFLINE_MESSAGE = 'The backend is offline. Try again when the service is available.';
 export const BACKEND_OFFLINE_TOAST = 'The backend is offline.';
 
-const client = axios.create({ baseURL: apiBaseUrl, headers: { 'Content-Type': 'application/json' } });
+const client = axios.create({
+  baseURL: apiBaseUrl,
+  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
+});
 const lockConflictListeners = new Set<(error: ApiRequestError) => void>();
 const backendUnavailableListeners = new Set<(error: ApiRequestError) => void>();
-export const techDriveHeaders = (username = getStoredPortalUsername()): Partial<ApiHeaders> =>
-  username ? { 'X-TechDrive-Username': username.trim() } : {};
+const sessionUnauthorizedListeners = new Set<(error: ApiRequestError) => void>();
+let portalAdmissionStatus: AdmissionStatus | null = null;
+export const setApiAdmissionStatus = (status: AdmissionStatus | null) => {
+  portalAdmissionStatus = status;
+};
+export const techDriveHeaders = (username = getStoredPortalUsername()): Partial<ApiHeaders> => {
+  const tabId = getPortalTabId();
+  return {
+    ...(username ? { 'X-TechDrive-Username': username.trim() } : {}),
+    ...(tabId ? { 'X-Portal-Tab-Id': tabId } : {}),
+  };
+};
 
 export function isPortalIdentityParameter(
   parameter: Pick<DatabaseQuery['parameters'][number], 'name'> | null | undefined,
@@ -102,15 +117,22 @@ export function isBackendUnavailable(error: unknown): boolean {
 }
 
 client.interceptors.request.use((config) => {
-  const existing =
-    typeof config.headers?.get === 'function'
-      ? config.headers.get('X-TechDrive-Username')
-      : config.headers?.['X-TechDrive-Username'];
-  if (existing) return config;
+  const url = String(config.url || '');
+  const allowedWhileQueued = /^\/users\/(?:validate|me|queue|logout|activity)(?:$|[/?])/.test(url);
+  if (portalAdmissionStatus === 'QUEUED' && !allowedWhileQueued) {
+    const error = new Error('Portal admission is required before this request can be made.') as ApiRequestError;
+    error.status = 409;
+    error.code = 'PORTAL_ADMISSION_REQUIRED';
+    error.paths = [];
+    error.users = [];
+    error.details = null;
+    throw error;
+  }
   const headers = techDriveHeaders();
-  if (!headers['X-TechDrive-Username']) return config;
   if (typeof config.headers?.set === 'function') {
-    config.headers.set('X-TechDrive-Username', headers['X-TechDrive-Username']);
+    for (const [name, value] of Object.entries(headers)) {
+      if (value && !config.headers.get(name)) config.headers.set(name, value);
+    }
   } else {
     config.headers = axios.AxiosHeaders.from({ ...config.headers, ...headers });
   }
@@ -144,13 +166,21 @@ function normalizedError(
   return result;
 }
 
-async function request<T>(promise: Promise<AxiosResponse<T>>, fallback: string, notifyLockConflict = true): Promise<T> {
+async function request<T>(
+  promise: Promise<AxiosResponse<T>>,
+  fallback: string,
+  notifyLockConflict = true,
+  notifySessionUnauthorized = true,
+): Promise<T> {
   try {
     return (await promise).data;
   } catch (error) {
     if (axios.isCancel(error)) throw error;
     const result = normalizedError(error, fallback);
     if (notifyLockConflict && result.status === 423) lockConflictListeners.forEach((listener) => listener(result));
+    if (notifySessionUnauthorized && result.status === 401) {
+      sessionUnauthorizedListeners.forEach((listener) => listener(result));
+    }
     if (isBackendUnavailable(error) || isBackendUnavailable(result)) {
       backendUnavailableListeners.forEach((listener) => listener(result));
     }
@@ -177,6 +207,7 @@ async function blobRequest(promise: Promise<AxiosResponse<Blob>>): Promise<Downl
     }
     const result = normalizedError(error, 'Download failed', parsedBody);
     if (result.status === 423) lockConflictListeners.forEach((listener) => listener(result));
+    if (result.status === 401) sessionUnauthorizedListeners.forEach((listener) => listener(result));
     if (isBackendUnavailable(error) || isBackendUnavailable(result)) {
       backendUnavailableListeners.forEach((listener) => listener(result));
     }
@@ -190,9 +221,32 @@ export const validateUser = (username: string): Promise<RouteResponse<'GET /api/
       headers: techDriveHeaders(username),
     }),
     'Unable to validate this username',
+    false,
+    false,
+  );
+export const getCurrentPortalSession = (): Promise<RouteResponse<'GET /api/users/me'>> =>
+  request<RouteResponse<'GET /api/users/me'>>(
+    client.get<RouteResponse<'GET /api/users/me'>>('/users/me'),
+    'Unable to restore the portal session',
+    false,
+    false,
+  );
+export const getPortalQueue = (): Promise<RouteResponse<'GET /api/users/queue'>> =>
+  request<RouteResponse<'GET /api/users/queue'>>(
+    client.get<RouteResponse<'GET /api/users/queue'>>('/users/queue'),
+    'Unable to refresh the admission queue',
+    false,
   );
 export const reportUserActivity = (): Promise<void> =>
   request<void>(client.post<void>('/users/activity'), 'Unable to report user activity');
+export const logoutPortalSession = (): Promise<void> =>
+  request<void>(client.post<void>('/users/logout'), 'Unable to log out', false);
+export const forceLogoutPortalUser = (username: string): Promise<void> =>
+  request<void>(
+    client.post<void>(`/users/${encodeURIComponent(username)}/force-logout`),
+    `Unable to force logout ${username}`,
+    false,
+  );
 export const getLocks = (): Promise<LockInfo[]> =>
   request<LockInfo[]>(client.get<LockInfo[]>('/locks'), 'Unable to reconcile shared locks', false);
 export const onLockConflict = (listener: (error: ApiRequestError) => void): (() => void) => {
@@ -205,6 +259,12 @@ export const onBackendUnavailable = (listener: (error: ApiRequestError) => void)
   backendUnavailableListeners.add(listener);
   return () => {
     backendUnavailableListeners.delete(listener);
+  };
+};
+export const onSessionUnauthorized = (listener: (error: ApiRequestError) => void): (() => void) => {
+  sessionUnauthorizedListeners.add(listener);
+  return () => {
+    sessionUnauthorizedListeners.delete(listener);
   };
 };
 export const getJars = (): Promise<JarCatalogueResponse> =>

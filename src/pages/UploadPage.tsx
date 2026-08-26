@@ -207,7 +207,11 @@ export default function UploadPage() {
       }
       setOperation(nextOperation);
       if (summary) setTargetSummary(summary);
+      const preflightOnly =
+        nextOperation.mode === UPLOAD_MODES.WILDFLY_HOTFIX &&
+        (nextOperation.status === 'READY' || nextOperation.status === 'AWAITING_SELECTION');
       if (isUploadTerminal(nextOperation)) clearStoredOperation();
+      else if (preflightOnly) clearStoredOperation();
       else storeOperation(nextOperation);
     },
     [clearStoredOperation, storeOperation],

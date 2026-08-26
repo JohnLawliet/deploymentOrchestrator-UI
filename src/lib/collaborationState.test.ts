@@ -45,9 +45,9 @@ describe('presence collaboration state', () => {
 
   it('accepts equal/newer transitions, removes OFFLINE users, and retains revision tombstones', () => {
     let state = replacePresence([user('John Smith', 'ACTIVE', 3)]);
-    state = reducePresence(state, presenceEvent('IDLE', user('John Smith', 'IDLE', 3)));
+    state = reducePresence(state, presenceEvent('IDLE', user('John Smith', 'ACTIVE', 3)));
     expect(state.users.johnsmith.status).toBe('IDLE');
-    state = reducePresence(state, presenceEvent('OFFLINE', user('John Smith', 'OFFLINE', 4)));
+    state = reducePresence(state, presenceEvent('OFFLINE', user('John Smith', 'ACTIVE', 4)));
     expect(state.users.johnsmith).toBeUndefined();
     expect(reducePresence(state, presenceEvent('ACTIVE', user('John Smith', 'ACTIVE', 3)))).toBe(state);
   });

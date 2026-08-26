@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
 const portal = vi.hoisted(() => ({
+  sessionPhase: 'anonymous' as 'restoring' | 'anonymous' | 'validating' | 'queued' | 'admitted' | 'loggingOut',
   validated: false,
   username: '',
   validationState: 'idle' as 'idle' | 'validating' | 'valid' | 'invalid',
@@ -49,12 +50,16 @@ vi.mock('@/pages/UatBuildPage', () => ({
 vi.mock('@/pages/UploadPage', () => ({
   default: () => <div>Upload page</div>,
 }));
+vi.mock('@/pages/QueuePage', () => ({
+  default: () => <div>Queue page</div>,
+}));
 
 import { AppRoutes } from './App';
 
 describe('AppRoutes', () => {
   beforeEach(() => {
     portal.validated = false;
+    portal.sessionPhase = 'anonymous';
     portal.username = '';
     portal.validationState = 'idle';
     portal.reportInteraction.mockReset();
@@ -74,6 +79,7 @@ describe('AppRoutes', () => {
 
   it('sends authenticated unknown paths to the dashboard', () => {
     portal.validated = true;
+    portal.sessionPhase = 'admitted';
     render(
       <MemoryRouter initialEntries={['/not-a-page']}>
         <AppRoutes />
@@ -85,6 +91,7 @@ describe('AppRoutes', () => {
 
   it('keeps a direct protected URL while a stored session is being revalidated', () => {
     portal.username = 'john_smith';
+    portal.sessionPhase = 'restoring';
     portal.validationState = 'validating';
     const view = render(
       <MemoryRouter initialEntries={['/dashboard']}>
@@ -96,6 +103,7 @@ describe('AppRoutes', () => {
     expect(screen.queryByText('Username gate')).not.toBeInTheDocument();
 
     portal.validated = true;
+    portal.sessionPhase = 'admitted';
     portal.validationState = 'valid';
     view.rerender(
       <MemoryRouter initialEntries={['/dashboard']}>
@@ -117,6 +125,7 @@ describe('AppRoutes', () => {
     expect(screen.getByText('Username gate')).toBeInTheDocument();
 
     portal.validated = true;
+    portal.sessionPhase = 'admitted';
     portal.validationState = 'valid';
     view.rerender(
       <MemoryRouter initialEntries={['/dashboard']}>
@@ -129,6 +138,7 @@ describe('AppRoutes', () => {
 
   it('sends authenticated users from the login root to the dashboard', () => {
     portal.validated = true;
+    portal.sessionPhase = 'admitted';
     render(
       <MemoryRouter initialEntries={['/']}>
         <AppRoutes />
@@ -136,5 +146,16 @@ describe('AppRoutes', () => {
     );
 
     expect(screen.getByText('Dashboard page')).toBeInTheDocument();
+  });
+
+  it('routes queued sessions to the queue page and keeps protected pages unavailable', () => {
+    portal.sessionPhase = 'queued';
+    render(
+      <MemoryRouter initialEntries={['/deploy-war']}>
+        <AppRoutes />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Queue page')).toBeInTheDocument();
+    expect(screen.queryByText('WAR page')).not.toBeInTheDocument();
   });
 });

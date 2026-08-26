@@ -34,12 +34,14 @@ export function reducePresence(state: PresenceState, event: PresenceEvent): Pres
   const item = event.resources;
   const key = normalizeUsername(item.username || event.username);
   if (!key) return state;
+  const status = String(event.state || item.status || '').toUpperCase() as UserPresence['status'];
+  if (status !== 'ACTIVE' && status !== 'IDLE' && status !== 'OFFLINE') return state;
   const revision = revisionOf(item);
   if (revision < (state.revisions[key] ?? -1)) return state;
   const revisions = { ...state.revisions, [key]: revision };
   const users = { ...state.users };
-  if (item.status === 'OFFLINE') delete users[key];
-  else users[key] = item;
+  if (status === 'OFFLINE') delete users[key];
+  else users[key] = { ...item, status };
   return { users, revisions };
 }
 

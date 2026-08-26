@@ -5,10 +5,18 @@ import { MemoryRouter } from 'react-router-dom';
 import { userPresence } from '@/test/factories';
 import type { UserPresence } from '@/types/api-contracts';
 
-type SidebarPortalMock = { changeUser: ReturnType<typeof vi.fn>; username: string; onlineUsers: UserPresence[] };
+type SidebarPortalMock = {
+  changeUser: ReturnType<typeof vi.fn>;
+  forceLogoutUser: ReturnType<typeof vi.fn>;
+  isAdmin: boolean;
+  username: string;
+  onlineUsers: UserPresence[];
+};
 
 const portal = vi.hoisted((): SidebarPortalMock => ({
   changeUser: vi.fn(),
+  forceLogoutUser: vi.fn(),
+  isAdmin: false,
   username: 'jonty',
   onlineUsers: [],
 }));
@@ -17,6 +25,8 @@ vi.mock('@/context/PortalContext', () => ({
   usePortal: () => ({
     username: portal.username,
     changeUser: portal.changeUser,
+    forceLogoutUser: portal.forceLogoutUser,
+    isAdmin: portal.isAdmin,
     systemStatus: 'connected',
     operations: {},
     onlineUsers: portal.onlineUsers,
@@ -30,6 +40,7 @@ describe('Sidebar Upload navigation', () => {
     cleanup();
     portal.username = 'jonty';
     portal.onlineUsers = [];
+    portal.isAdmin = false;
   });
 
   it('replaces the deferred hotfix item with an active Upload link', () => {
@@ -82,8 +93,25 @@ describe('Sidebar Upload navigation', () => {
     const names = Array.from(list.querySelectorAll('.font-medium')).map((item) => item.textContent);
     expect(names).toEqual(['John Smith', 'amy']);
     expect(screen.getByText('IDLE')).toBeVisible();
-    expect(screen.getByText('No recent activity')).toBeVisible();
+    expect(screen.getByText(/No recent activity/)).toBeVisible();
     expect(screen.getByText(/jar:orders · COMPLETED/)).toBeVisible();
-    expect(list).toHaveClass('overflow-y-auto');
+    expect(list.parentElement).toHaveClass('overflow-y-auto');
+  });
+
+  it('shows force logout beside other users only for admins', async () => {
+    portal.isAdmin = true;
+    portal.username = 'admin';
+    portal.onlineUsers = [userPresence({ username: 'admin' }), userPresence({ username: 'amy' })];
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Actions for admin' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Actions for amy' }));
+    await user.click(screen.getByRole('button', { name: 'Force logout' }));
+    expect(portal.forceLogoutUser).toHaveBeenCalledWith('amy');
   });
 });

@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { usePortal } from '@/context/PortalContext';
 import { isOperationTerminal } from '@/lib/operationProgress';
+import OnlineUsersList from '@/components/OnlineUsersList';
 
 const APP_NAME = import.meta.env.VITE_APP_NAME || 'Deployment Orchestrator';
 
@@ -59,7 +60,7 @@ const navItems = [
 ];
 
 export default function Sidebar() {
-  const { username, changeUser, systemStatus, operations, onlineUsers = [] } = usePortal();
+  const { username, changeUser, forceLogoutUser, isAdmin, systemStatus, operations, onlineUsers = [] } = usePortal();
   const activeOperations = Object.values(operations).filter((item) => !isOperationTerminal(item)).length;
   return (
     <aside
@@ -117,30 +118,8 @@ export default function Sidebar() {
           </p>
           <span className="text-xs text-muted-foreground">{onlineUsers.length}</span>
         </div>
-        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1" data-testid="online-users-list">
-          {onlineUsers.map((user) => (
-            <div key={`${user.username}:${user.revision}`} className="rounded-md border border-border/70 px-2.5 py-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${user.status === 'ACTIVE' ? 'bg-green-500' : 'bg-amber-400'}`} />
-                <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{user.username}</span>
-                <span className="text-[10px] text-muted-foreground">{user.status}</span>
-              </div>
-              <p className="mt-1 truncate text-[11px] text-muted-foreground" title={user.lastActivity || ''}>
-                {user.lastActivity
-                  ? [
-                      user.lastActivity,
-                      user.lastActivityStatus,
-                      user.lastActivityTime
-                        ? new Date(user.lastActivityTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')
-                  : 'No recent activity'}
-              </p>
-            </div>
-          ))}
-          {!onlineUsers.length && <p className="px-2 py-3 text-xs text-muted-foreground">No connected users.</p>}
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <OnlineUsersList users={onlineUsers} currentUsername={username} isAdmin={isAdmin} onForceLogout={forceLogoutUser} />
         </div>
       </section>
 
@@ -163,7 +142,7 @@ export default function Sidebar() {
               </Button>
             </PopoverTrigger>
             <PopoverContent side="right" align="end" sideOffset={8} className="z-[100] w-40 p-1">
-              <Button variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={changeUser}>
+              <Button variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => void changeUser()}>
                 Log out
               </Button>
             </PopoverContent>
