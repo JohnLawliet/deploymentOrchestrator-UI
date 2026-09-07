@@ -5,8 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const listFiles = vi.hoisted(() => vi.fn());
 const deleteFiles = vi.hoisted(() => vi.fn());
+const extractFile = vi.hoisted(() => vi.fn());
 const renameFile = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/contractApi', () => ({ deleteFiles, listFiles, renameFile }));
+vi.mock('@/lib/contractApi', () => ({
+  EXTRACTION_UNCONFIRMED_MESSAGE: 'The extraction result could not be confirmed. Refresh the directory before trying again.',
+  deleteFiles,
+  extractFile,
+  listFiles,
+  renameFile,
+}));
 
 import FileBrowser from './FileBrowser';
 
@@ -16,7 +23,118 @@ describe('FileBrowser selectableType', () => {
     vi.restoreAllMocks();
     listFiles.mockReset();
     deleteFiles.mockReset();
+    extractFile.mockReset();
     renameFile.mockReset();
+  });
+
+  it('shows Extract here only for supported archive files, including mixed case and .tar.gz', async () => {
+    listFiles.mockResolvedValue([
+      ...['release.zip', 'app.WAR', 'catalog.Jar', 'bundle.7Z', 'server.TAR.GZ'].map((name) => ({ name, type: 'file' })),
+      { name: 'notes.zip.txt', type: 'file' },
+      { name: 'folder.zip', type: 'directory' },
+    ]);
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    for (const name of ['release.zip', 'app.WAR', 'catalog.Jar', 'bundle.7Z', 'server.TAR.GZ']) {
+      expect(await screen.findByRole('button', { name: `Extract here ${name}` })).toBeEnabled();
+    }
+    expect(screen.queryByRole('button', { name: 'Extract here notes.zip.txt' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Extract here folder.zip' })).not.toBeInTheDocument();
+  });
+
+  it('extracts a clicked archive using its current root-relative path and prevents duplicate submissions', async () => {
+    listFiles
+      .mockResolvedValueOnce([{ name: 'releases', type: 'directory' }])
+      .mockResolvedValueOnce([{ name: 'app.tar.gz', type: 'file' }]);
+    let resolveExtraction: (value: { rootKey: string; sourcePath: string; destinationPath: string }) => void = () => undefined;
+    extractFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveExtraction = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="qc" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: 'releases' }));
+    const extract = await screen.findByRole('button', { name: 'Extract here app.tar.gz' });
+    await user.click(extract);
+    expect(await screen.findByRole('button', { name: 'Extracting app.tar.gz' })).toHaveTextContent('Extracting…');
+    await user.click(screen.getByRole('button', { name: 'Extracting app.tar.gz' }));
+    expect(extractFile).toHaveBeenCalledTimes(1);
+    expect(extractFile).toHaveBeenCalledWith({ rootKey: 'qc', path: 'releases/app.tar.gz' });
+
+    resolveExtraction({ rootKey: 'qc', sourcePath: 'releases/app.tar.gz', destinationPath: 'releases/app_2' });
+  });
+
+  it('refreshes, highlights the server-returned folder, and retains the archive after extraction', async () => {
+    listFiles
+      .mockResolvedValueOnce([{ name: 'app.zip', type: 'file' }])
+      .mockResolvedValueOnce([
+        { name: 'app.zip', type: 'file' },
+        { name: 'app_7', type: 'directory' },
+      ]);
+    extractFile.mockResolvedValue({ rootKey: 'techDrive', sourcePath: 'app.zip', destinationPath: 'app_7' });
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Extract here app.zip' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Extracted to app_7');
+    await waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('file-browser-list').querySelector('[data-path="app.zip"]')).toBeInTheDocument();
+    expect(screen.getByTestId('file-browser-list').querySelector('[data-path="app_7"]')).toHaveClass('bg-emerald-50');
+  });
+
+  it.each([
+    [{ status: 413, code: 'ARCHIVE_LIMIT_EXCEEDED', message: 'limit' }, 'server extraction limit'],
+    [{ status: 415, code: 'UNSUPPORTED_ARCHIVE_FORMAT', message: 'format' }, 'unsupported or has been disabled'],
+    [{ status: 422, code: 'INVALID_ARCHIVE', message: 'invalid' }, 'corrupt, unsafe, encrypted'],
+    [{ status: 500, code: 'ARCHIVE_CLEANUP_FAILED', message: 'cleanup' }, 'could not be completely deleted'],
+  ])('explains extraction failures without adding a destination', async (error, expectedMessage) => {
+    listFiles.mockResolvedValue([{ name: 'app.zip', type: 'file' }]);
+    extractFile.mockRejectedValue(error);
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Extract here app.zip' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(expectedMessage);
+    expect(listFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes a disappeared archive and reports uncertain outcomes without retrying', async () => {
+    listFiles.mockResolvedValue([{ name: 'app.zip', type: 'file' }]);
+    extractFile.mockRejectedValueOnce({ status: 404, code: 'SOURCE_NOT_FOUND', message: 'gone' }).mockRejectedValueOnce(new Error('network'));
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Extract here app.zip' }));
+    await waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: 'Extract here app.zip' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The extraction result could not be confirmed. Refresh the directory before trying again.',
+    );
+    expect(extractFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows lock owners and paths from a rejected extraction', async () => {
+    listFiles.mockResolvedValue([{ name: 'app.zip', type: 'file' }]);
+    extractFile.mockRejectedValue({
+      status: 423,
+      code: 'RESOURCE_LOCKED',
+      message: 'The archive is locked.',
+      users: ['Ada'],
+      paths: ['releases/app.zip'],
+    });
+    const user = userEvent.setup();
+    render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Extract here app.zip' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The archive is locked.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Users: Ada');
+    expect(screen.getByRole('alert')).toHaveTextContent('releases/app.zip');
   });
 
   it('allows directory selection while keeping files unselectable', async () => {
@@ -46,12 +164,29 @@ describe('FileBrowser selectableType', () => {
       { name: 'nested', type: 'directory' },
       { name: 'build.war', type: 'file', size: 100 },
       { name: 'notes.txt', type: 'file', size: 20 },
+      { name: 'build.zip', type: 'file', size: 100 },
     ]);
     render(<FileBrowser rootKey="techDrive" selectableExtension=".war" selected={[]} onSelectionChange={vi.fn()} />);
 
     expect(await screen.findByLabelText('Select nested')).toBeDisabled();
     expect(screen.getByLabelText('Select build.war')).toBeEnabled();
     expect(screen.getByLabelText('Select notes.txt')).toBeDisabled();
+    expect(screen.getByLabelText('Select build.zip')).toBeDisabled();
+  });
+
+  it('accepts multiple extensions case-insensitively while excluding directories and other files', async () => {
+    listFiles.mockResolvedValue([
+      ...['build.war', 'build.zip', 'upper.WAR', 'upper.ZIP', 'notes.txt', 'build.zip.txt'].map((name) => ({
+        name,
+        type: 'file',
+      })),
+      { name: 'nested.zip', type: 'directory' },
+    ]);
+    render(<FileBrowser rootKey="techDrive" selectableExtension={['.war', '.zip']} selected={[]} onSelectionChange={vi.fn()} />);
+    expect(await screen.findByLabelText('Select build.zip')).toBeEnabled();
+    for (const name of ['build.war', 'upper.WAR', 'upper.ZIP']) expect(screen.getByLabelText(`Select ${name}`)).toBeEnabled();
+    for (const name of ['notes.txt', 'build.zip.txt', 'nested.zip'])
+      expect(screen.getByLabelText(`Select ${name}`)).toBeDisabled();
   });
 
   it('keeps locked entries visible but unselectable', async () => {

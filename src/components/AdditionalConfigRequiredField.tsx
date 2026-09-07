@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { errorMessage } from '@/types/frontend';
 
 type AdditionalConfigRequiredFieldProps = {
+  sourceLabel?: 'WAR' | 'archive';
   checked: boolean;
   disabled?: boolean;
   className?: string;
@@ -18,6 +19,7 @@ const isNotFound = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'status' in error && error.status === 404;
 
 export default function AdditionalConfigRequiredField({
+  sourceLabel = 'WAR',
   checked,
   disabled = false,
   className,
@@ -52,10 +54,10 @@ export default function AdditionalConfigRequiredField({
           onCheckedChange={(value) => onCheckedChange(value === true)}
         />
         <span>
-          <strong>Apply additional WAR configuration</strong>
+          <strong>Apply additional {sourceLabel} configuration</strong>
           <span className="mt-1 block text-xs text-muted-foreground">
-            Require an additionalConfig.toml beside the selected WAR for properties or web.xml changes. Leave unchecked when no
-            additional changes are needed.
+            Require an additionalConfig.toml beside the selected {sourceLabel} for properties or web.xml changes. Leave unchecked
+            when no additional changes are needed.
           </span>
         </span>
       </Label>

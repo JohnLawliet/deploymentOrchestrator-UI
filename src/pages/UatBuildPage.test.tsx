@@ -51,9 +51,16 @@ vi.mock('@microsoft/fetch-event-source', () => ({
 }));
 vi.mock('@/components/FileBrowser', () => ({
   default: ({ rootKey, onSelectionChange }: FileBrowserMockProps) => (
-    <button type="button" onClick={() => onSelectionChange([rootKey === 'techDrive' ? 'orders/uat.war' : 'orders/exploded'])}>
-      Select {rootKey}
-    </button>
+    <>
+      <button type="button" onClick={() => onSelectionChange([rootKey === 'techDrive' ? 'orders/uat.war' : 'orders/exploded'])}>
+        Select {rootKey}
+      </button>
+      {rootKey === 'techDrive' && (
+        <button type="button" onClick={() => onSelectionChange(['orders/uat.zip'])}>
+          Select ZIP
+        </button>
+      )}
+    </>
   ),
 }));
 vi.mock('@/components/ui/select', () => ({
@@ -180,6 +187,21 @@ describe('UatBuildPage', () => {
     api.preflightUatBuild.mockResolvedValue(preflight);
     await runPreflight(userEvent.setup(), { additionalConfig: true });
     expect(api.preflightUatBuild).toHaveBeenCalledWith(expect.objectContaining({ additionalConfigRequired: true }));
+  });
+
+  it('sends the selected ZIP unchanged as sourceWarPath', async () => {
+    const user = userEvent.setup();
+    await selectInputs(user);
+    await user.click(screen.getByRole('button', { name: 'Select ZIP' }));
+    await user.click(screen.getByRole('button', { name: 'Inspect and lock' }));
+    await waitFor(() =>
+      expect(api.preflightUatBuild).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceWarPath: 'orders/uat.zip',
+          jenkinsExplodedWarPath: 'orders/exploded',
+        }),
+      ),
+    );
   });
 
   it('releases and invalidates preflight when the additional configuration choice changes', async () => {

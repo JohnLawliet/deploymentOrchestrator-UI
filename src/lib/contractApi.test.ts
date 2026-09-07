@@ -28,7 +28,8 @@ const { client, interceptorState } = vi.hoisted(() => {
 vi.mock('axios', () => ({
   default: {
     create: () => client,
-    isCancel: () => false,
+    isCancel: (error: unknown) =>
+      typeof error === 'object' && error !== null && (error as { code?: string }).code === 'ERR_CANCELED',
     isAxiosError: (error: unknown) => typeof error === 'object' && error !== null && 'response' in error,
     AxiosHeaders: { from: (headers: Record<string, string>) => headers },
   },
@@ -36,14 +37,19 @@ vi.mock('axios', () => ({
 
 import {
   BACKEND_OFFLINE_MESSAGE,
+  DOWNLOAD_INTERRUPTED_MESSAGE,
+  EXTRACTION_UNCONFIRMED_MESSAGE,
   convertUatBuild,
   createUpload,
   deleteFiles,
   deployJar,
   downloadAdditionalConfigSample,
+  downloadSelection,
+  downloadSingle,
   downloadTerminal,
   executeDatabaseQuery,
   executeUpload,
+  extractFile,
   getDatabaseTableRows,
   getDatabaseTables,
   getCurrentPortalSession,
@@ -366,7 +372,7 @@ describe('executeDatabaseQuery', () => {
       filename: 'operation.log',
     });
 
-    expect(client.get).toHaveBeenCalledWith('/terminals/operation%2F42/download', { responseType: 'blob' });
+    expect(client.get).toHaveBeenCalledWith('/terminals/operation%2F42/download', { responseType: 'blob', timeout: 0 });
   });
 
   it('downloads the additionalConfig sample as a blob and reads the save name from Content-Disposition', async () => {
@@ -380,7 +386,40 @@ describe('executeDatabaseQuery', () => {
       filename: 'additionalConfig-sample.toml',
     });
 
-    expect(client.get).toHaveBeenCalledWith('/files/sample/additionalConfig', { responseType: 'blob' });
+    expect(client.get).toHaveBeenCalledWith('/files/sample/additionalConfig', { responseType: 'blob', timeout: 0 });
+  });
+
+  it('uses explicit unlimited timeouts for single-file and streamed ZIP downloads', async () => {
+    client.get.mockResolvedValueOnce({ data: new Blob(['file']), headers: {} });
+    client.post.mockResolvedValueOnce({ data: new Blob(['zip']), headers: {} });
+
+    await downloadSingle('qc', 'release/app.war');
+    await downloadSelection('qc', ['release/exploded-app']);
+
+    expect(client.get).toHaveBeenCalledWith('/files/download', {
+      params: { rootKey: 'qc', path: 'release/app.war' },
+      responseType: 'blob',
+      timeout: 0,
+    });
+    expect(client.post).toHaveBeenCalledWith(
+      '/files/download',
+      { rootKey: 'qc', paths: ['release/exploded-app'] },
+      { responseType: 'blob', timeout: 0 },
+    );
+  });
+
+  it('keeps interrupted and cancelled downloads local to the download workflow', async () => {
+    const listener = vi.fn();
+    const unsubscribe = onBackendUnavailable(listener);
+    client.get.mockRejectedValueOnce(Object.assign(new Error('connection reset'), { request: {} }));
+
+    await expect(downloadSingle('qc', 'release/exploded-app')).rejects.toThrow(DOWNLOAD_INTERRUPTED_MESSAGE);
+    expect(listener).not.toHaveBeenCalled();
+
+    client.get.mockRejectedValueOnce(Object.assign(new Error('cancelled'), { code: 'ERR_CANCELED' }));
+    await expect(downloadSingle('qc', 'release/exploded-app')).rejects.toThrow(DOWNLOAD_INTERRUPTED_MESSAGE);
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   it('sends the root and selected paths in the bulk file deletion body', async () => {
@@ -401,6 +440,31 @@ describe('executeDatabaseQuery', () => {
       path: 'release/old-name.war',
       newName: 'new-name.war',
     });
+  });
+
+  it('extracts one archive with the authenticated API client and a root-relative payload', async () => {
+    client.post.mockResolvedValue({
+      data: { rootKey: 'qc', sourcePath: 'releases/app.tar.gz', destinationPath: 'releases/app_2' },
+    });
+
+    await expect(extractFile({ rootKey: 'qc', path: 'releases/app.tar.gz' })).resolves.toEqual({
+      rootKey: 'qc',
+      sourcePath: 'releases/app.tar.gz',
+      destinationPath: 'releases/app_2',
+    });
+
+    expect(client.post).toHaveBeenCalledWith(
+      '/files/extract',
+      { rootKey: 'qc', path: 'releases/app.tar.gz' },
+      { timeout: 0 },
+    );
+  });
+
+  it('does not retry an extraction whose outcome cannot be confirmed', async () => {
+    client.post.mockRejectedValue(Object.assign(new Error('connection reset'), { request: {} }));
+
+    await expect(extractFile({ rootKey: 'techDrive', path: 'app.zip' })).rejects.toThrow(EXTRACTION_UNCONFIRMED_MESSAGE);
+    expect(client.post).toHaveBeenCalledTimes(1);
   });
 
   it('preserves structured JAR deployment API errors', async () => {

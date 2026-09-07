@@ -12,7 +12,6 @@ type SessionUnauthorizedHandler = (error: ApiRequestError) => void;
 const api = vi.hoisted(() => ({
   getLocks: vi.fn(),
   getCurrentPortalSession: vi.fn(),
-  getPortalQueue: vi.fn(),
   getOperation: vi.fn(),
   getProfiles: vi.fn(),
   getRuntimeResource: vi.fn(),
@@ -32,7 +31,6 @@ vi.mock('@/lib/contractApi', () => ({
   eventUrl: (path: string) => `/deploymentOrchestrator/api${path}`,
   getLocks: api.getLocks,
   getCurrentPortalSession: api.getCurrentPortalSession,
-  getPortalQueue: api.getPortalQueue,
   getOperation: api.getOperation,
   getProfiles: api.getProfiles,
   getRuntimeResource: api.getRuntimeResource,
@@ -108,10 +106,22 @@ const operationFinished = (overrides: Partial<OperationFinished> = {}): Operatio
   ...overrides,
 });
 
-const streamOptions = (): FetchEventSourceInit => {
-  const call = stream.fetchEventSource.mock.calls[0];
-  if (!call) throw new Error('Expected an event stream connection.');
+const streamOptions = (path = '/system/events'): FetchEventSourceInit => {
+  const call = stream.fetchEventSource.mock.calls.find(([url]) => String(url).includes(path));
+  if (!call) throw new Error(`Expected an event stream connection to ${path}.`);
   return call[1];
+};
+
+const queueStatusMessage = (payload: Record<string, unknown>): EventSourceMessage => ({
+  id: '',
+  event: 'PORTAL_QUEUE_STATUS',
+  data: JSON.stringify(payload),
+});
+
+const sendQueueStatus = (options: FetchEventSourceInit, payload: Record<string, unknown>) => {
+  const onmessage = options.onmessage;
+  if (!onmessage) throw new Error('Expected a queue stream message handler.');
+  act(() => onmessage(queueStatusMessage(payload)));
 };
 
 const send = (options: FetchEventSourceInit, payload: SystemEvent) => {
@@ -157,13 +167,6 @@ describe('PortalProvider collaboration contracts', () => {
       onlineCount: 1,
       queuePosition: null,
     });
-    api.getPortalQueue.mockResolvedValue({
-      admissionStatus: 'QUEUED',
-      maxOnlineUsers: 5,
-      onlineCount: 5,
-      queuePosition: 1,
-      onlineUsers: [],
-    });
     api.validateUser.mockResolvedValue({
       valid: true,
       normalizedUsername: 'John Smith',
@@ -191,7 +194,6 @@ describe('PortalProvider collaboration contracts', () => {
     vi.restoreAllMocks();
     api.getLocks.mockReset();
     api.getCurrentPortalSession.mockReset();
-    api.getPortalQueue.mockReset();
     api.getOperation.mockReset();
     api.getProfiles.mockReset();
     api.getRuntimeResource.mockReset();
@@ -617,21 +619,14 @@ describe('PortalProvider collaboration contracts', () => {
     expect(options.signal?.aborted).toBe(true);
   });
 
-  it('polls only while queued and admits the user when the queue response changes', async () => {
-    vi.useFakeTimers();
+  it('opens queue SSE while queued and does not open system SSE or report activity', async () => {
     api.getCurrentPortalSession.mockResolvedValueOnce({
       username: 'John Smith',
       isAdmin: false,
       admissionStatus: 'QUEUED',
-      maxOnlineUsers: 5,
-      onlineCount: 5,
-      queuePosition: 2,
-    });
-    api.getPortalQueue.mockResolvedValueOnce({
-      admissionStatus: 'ADMITTED',
-      maxOnlineUsers: 5,
-      onlineCount: 5,
-      queuePosition: null,
+      maxOnlineUsers: 2,
+      onlineCount: 2,
+      queuePosition: 1,
       onlineUsers: [],
     });
     render(
@@ -639,17 +634,73 @@ describe('PortalProvider collaboration contracts', () => {
         <Harness />
       </PortalProvider>,
     );
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await waitFor(() => expect(stream.fetchEventSource).toHaveBeenCalled());
+    expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/users/queue/events'))).toBe(true);
+    expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/system/events'))).toBe(false);
     expect(screen.getByTestId('session-phase')).toHaveTextContent('queued');
-    await act(async () => {
-      vi.advanceTimersByTime(5000);
-      await Promise.resolve();
-      await Promise.resolve();
+    expect(screen.getByTestId('username')).toHaveTextContent('John Smith');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Interact' }));
+    expect(api.reportUserActivity).not.toHaveBeenCalled();
+  });
+
+  it('keeps a queued session when validate returns QUEUED and opens only the queue stream', async () => {
+    api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
+    api.validateUser.mockResolvedValueOnce({
+      valid: true,
+      normalizedUsername: 'John Smith',
+      isAdmin: false,
+      admissionStatus: 'QUEUED',
+      maxOnlineUsers: 2,
+      onlineCount: 2,
+      queuePosition: 1,
+      onlineUsers: [],
+      notices: [],
     });
-    expect(api.getPortalQueue).toHaveBeenCalledOnce();
-    expect(screen.getByTestId('session-phase')).toHaveTextContent('admitted');
+
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('anonymous'));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('queued'));
+    expect(screen.getByTestId('username')).toHaveTextContent('John Smith');
+    expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/users/queue/events'))).toBe(true);
+    expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/system/events'))).toBe(false);
+  });
+
+  it('admits the user from queue SSE and then opens the system stream', async () => {
+    api.getCurrentPortalSession.mockResolvedValueOnce({
+      username: 'John Smith',
+      isAdmin: false,
+      admissionStatus: 'QUEUED',
+      maxOnlineUsers: 5,
+      onlineCount: 5,
+      queuePosition: 2,
+      onlineUsers: [],
+    });
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(stream.fetchEventSource).toHaveBeenCalled());
+    const queueOptions = streamOptions('/users/queue/events');
+    await openStream(queueOptions);
+    sendQueueStatus(queueOptions, {
+      username: 'John Smith',
+      isAdmin: false,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 5,
+      queuePosition: 0,
+      onlineUsers: [],
+    });
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('admitted'));
+    await waitFor(() =>
+      expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/system/events'))).toBe(true),
+    );
   });
 });

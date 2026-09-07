@@ -11,6 +11,8 @@ import type {
   DatabaseTable,
   DeploymentRecord,
   DeploymentStartResponse,
+  ExtractRequest,
+  ExtractResponse,
   FileNode,
   FileRoot,
   JarCatalogueResponse,
@@ -69,6 +71,9 @@ const backendOrigin = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, ''
 const apiBaseUrl = `${backendOrigin}${apiContextPath}/api`;
 export const BACKEND_OFFLINE_MESSAGE = 'The backend is offline. Try again when the service is available.';
 export const BACKEND_OFFLINE_TOAST = 'The backend is offline.';
+export const DOWNLOAD_INTERRUPTED_MESSAGE = 'Download interrupted. The service may still be available; please retry.';
+export const EXTRACTION_UNCONFIRMED_MESSAGE =
+  'The extraction result could not be confirmed. Refresh the directory before trying again.';
 
 const client = axios.create({
   baseURL: apiBaseUrl,
@@ -118,7 +123,7 @@ export function isBackendUnavailable(error: unknown): boolean {
 
 client.interceptors.request.use((config) => {
   const url = String(config.url || '');
-  const allowedWhileQueued = /^\/users\/(?:validate|me|queue|logout|activity)(?:$|[/?])/.test(url);
+  const allowedWhileQueued = /^\/users\/(?:validate|me|queue|logout)(?:$|[/?])/.test(url);
   if (portalAdmissionStatus === 'QUEUED' && !allowedWhileQueued) {
     const error = new Error('Portal admission is required before this request can be made.') as ApiRequestError;
     error.status = 409;
@@ -204,6 +209,9 @@ async function blobRequest(promise: Promise<AxiosResponse<Blob>>): Promise<Downl
       } catch {
         /* non-JSON error */
       }
+    }
+    if (axios.isCancel(error) || (isRecord(error) && error.request != null && error.response == null)) {
+      throw new Error(DOWNLOAD_INTERRUPTED_MESSAGE);
     }
     const result = normalizedError(error, 'Download failed', parsedBody);
     if (result.status === 423) lockConflictListeners.forEach((listener) => listener(result));
@@ -368,7 +376,7 @@ export const rollbackWar = (snapshotId: number): Promise<DeploymentStartResponse
     'WAR rollback was rejected',
   );
 export const downloadTerminal = (deploymentId: string): Promise<DownloadResult> =>
-  blobRequest(client.get<Blob>(`/terminals/${encodeURIComponent(deploymentId)}/download`, { responseType: 'blob' }));
+  blobRequest(client.get<Blob>(`/terminals/${encodeURIComponent(deploymentId)}/download`, { responseType: 'blob', timeout: 0 }));
 export const deleteTerminal = (deploymentId: string): Promise<void> =>
   request<void>(client.delete<void>(`/terminals/${encodeURIComponent(deploymentId)}`), 'Unable to close the terminal');
 export const subscribeProfileLogs = (profileId: string): Promise<void> =>
@@ -389,15 +397,26 @@ export const listFiles = (rootKey: FileRoot['key'], path?: string, signal?: Abor
     'Unable to load this directory',
   );
 export const downloadSingle = (rootKey: FileRoot['key'], path: string): Promise<DownloadResult> =>
-  blobRequest(client.get<Blob>('/files/download', { params: { rootKey, path }, responseType: 'blob' }));
+  blobRequest(client.get<Blob>('/files/download', { params: { rootKey, path }, responseType: 'blob', timeout: 0 }));
 export const downloadAdditionalConfigSample = (): Promise<DownloadResult> =>
-  blobRequest(client.get<Blob>('/files/sample/additionalConfig', { responseType: 'blob' }));
+  blobRequest(client.get<Blob>('/files/sample/additionalConfig', { responseType: 'blob', timeout: 0 }));
 export const downloadSelection = (rootKey: FileRoot['key'], paths: string[]): Promise<DownloadResult> =>
-  blobRequest(client.post<Blob>('/files/download', { rootKey, paths }, { responseType: 'blob' }));
+  blobRequest(client.post<Blob>('/files/download', { rootKey, paths }, { responseType: 'blob', timeout: 0 }));
 export const deleteFiles = (rootKey: FileRoot['key'], paths: string[]): Promise<void> =>
   request<void>(client.delete<void>('/files', { data: { rootKey, paths } }), 'Unable to delete the selected items');
 export const renameFile = (payload: RenameRequest): Promise<void> =>
   request<void>(client.post<void>('/files/rename', payload), 'Unable to rename this file or folder');
+export const extractFile = async (payload: ExtractRequest): Promise<ExtractResponse> => {
+  try {
+    return await request<ExtractResponse>(
+      client.post<ExtractResponse>('/files/extract', payload, { timeout: 0 }),
+      'Unable to extract this archive',
+    );
+  } catch (error) {
+    if (!(error as ApiRequestError).status) throw new Error(EXTRACTION_UNCONFIRMED_MESSAGE);
+    throw error;
+  }
+};
 export const preflightUatBuild = (payload: UatPreflightRequest, signal?: AbortSignal): Promise<UatPreflightResponse> =>
   request<UatPreflightResponse>(
     client.post<UatPreflightResponse>('/uat-builds/preflight', payload, { signal }),

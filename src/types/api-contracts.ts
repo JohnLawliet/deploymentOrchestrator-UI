@@ -83,6 +83,15 @@ export interface RenameRequest {
   path: string;
   newName: string;
 }
+export interface ExtractRequest {
+  rootKey: RootKey;
+  path: string;
+}
+export interface ExtractResponse {
+  rootKey: RootKey;
+  sourcePath: string;
+  destinationPath: string;
+}
 
 export interface LockInfo {
   resourceKey: string;
@@ -385,6 +394,7 @@ export interface PortStatus {
 export interface UatPreflightRequest {
   application: string;
   sourceRootKey: 'techDrive';
+  /** Tech Drive source archive path; accepts .war or .zip with WAR-layout contents. */
   sourceWarPath: string;
   jenkinsRootKey: 'jenkinsBuild';
   jenkinsExplodedWarPath: string;
@@ -661,6 +671,7 @@ export interface ApiRoutes {
   'POST /api/files/download': { body: DownloadRequest; response: Blob };
   'DELETE /api/files': { body: DeleteRequest; response: void; status: 204 };
   'POST /api/files/rename': { body: RenameRequest; response: void };
+  'POST /api/files/extract': { body: ExtractRequest; response: ExtractResponse };
   'GET /api/logs': { query: { applicationName: string; date?: string }; response: Blob };
   'GET /api/dashboard/war-applications': {
     response: Array<{ application: string; warFileName: string; environments: string[] }>;
@@ -739,6 +750,10 @@ export interface ApiRoutes {
 }
 
 export interface SseRoutes {
+  'GET /api/users/queue/events': {
+    event: 'PORTAL_QUEUE_STATUS';
+    data: PortalSessionResponse;
+  };
   'GET /api/system/events': {
     event: SystemEvent['eventType'] | 'PROFILE_LOG';
     data: SystemEvent | ProfileLogEvent;

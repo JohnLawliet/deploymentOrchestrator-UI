@@ -71,6 +71,26 @@ keep `/tms/` proxied to the API:
 FallbackResource /index.html
 ```
 
+### QC large-download proxy checklist
+
+File and directory downloads are streamed by the backend and intentionally use
+an unlimited browser request timeout. A failed download must not by itself be
+treated as a backend outage. If a large download stops unexpectedly, inspect
+the browser Network panel/HAR and the proxy or load-balancer logs at the same
+timestamp before changing the UI.
+
+For the Apache/vhost or load-balancer route that proxies the API, configure
+both client-facing and upstream read/idle timeouts for at least 30 minutes,
+and ensure the route does not buffer streaming ZIP responses or impose a short
+time-to-first-byte timeout. Check access/error logs for a client-abort or
+499-style record. For the reported QC incident, correlate
+`2026-09-07 18:45:35` through `18:45:38` with the browser HAR and backend log.
+
+After deployment, download a roughly 250 MB exploded-WAR directory through
+the QC proxy. The request should remain pending until complete, the browser
+should save the ZIP, and a deliberately cancelled request should show a
+download-specific retry message without an application-wide offline warning.
+
 ---
 
 ## Production Build (Static Files for Spring Boot)

@@ -588,13 +588,13 @@ export default function UatBuildPage() {
             <div className="grid gap-5 xl:grid-cols-2">
               <div data-tour="uat-source" className="space-y-3">
                 <BrowserPanel
-                  title="UAT WAR from Tech Drive"
-                  description={roots?.techDrive ? `Root: ${rootLabel(roots.techDrive)}` : 'Select one .war file.'}
+                  title="UAT WAR or ZIP from Tech Drive"
+                  description={roots?.techDrive ? `Root: ${rootLabel(roots.techDrive)}` : 'Select one .war or .zip file.'}
                 >
                   <FileBrowser
                     rootKey="techDrive"
                     selectableType="file"
-                    selectableExtension=".war"
+                    selectableExtension={['.war', '.zip']}
                     selected={source}
                     onSelectionChange={(items) => changeInput(setSource, items.slice(-1))}
                   />
@@ -605,6 +605,7 @@ export default function UatBuildPage() {
                   )}
                 </BrowserPanel>
                 <AdditionalConfigRequiredField
+                  sourceLabel="archive"
                   checked={additionalConfigRequired}
                   disabled={tutorialActive}
                   onCheckedChange={(checked) => changeInput(setAdditionalConfigRequired, checked)}

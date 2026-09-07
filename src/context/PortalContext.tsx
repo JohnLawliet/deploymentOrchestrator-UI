@@ -8,7 +8,6 @@ import {
   getCurrentPortalSession,
   getLocks,
   getOperation,
-  getPortalQueue,
   getProfiles,
   getRuntimeResource,
   isBackendUnavailable,
@@ -57,6 +56,7 @@ import type {
   JarProfileActivity,
   ProfileLogEvent,
   RuntimeResource,
+  PortalQueueResponse,
   PortalSessionResponse,
 } from '@/types/api-contracts';
 import type {
@@ -102,6 +102,7 @@ type PortalContextValue = ActivityMaps & {
   reconcileProfileActivity: (profileId?: string) => Promise<RuntimeActivityModel | RuntimeActivityModel[] | null>;
   reconcileResourceActivity: (resourceKey: string) => Promise<RuntimeActivityModel | null>;
   systemStatus: SystemStatus;
+  queueStreamStatus: SystemStatus;
   snapshotRevision: number;
   lastSystemEvent: PortalEvent | null;
   operations: OperationMap;
@@ -566,6 +567,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     frontendProfileActivityMap: {},
   });
   const [systemStatus, setSystemStatus] = useState<SystemStatus>('disconnected');
+  const [queueStreamStatus, setQueueStreamStatus] = useState<SystemStatus>('disconnected');
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const [lastSystemEvent, setLastSystemEvent] = useState<PortalEvent | null>(null);
   const [operations, setOperations] = useState<OperationMap>({});
@@ -585,6 +587,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const systemToastSequenceRef = useRef(0);
   const systemEventControllerRef = useRef<AbortController | null>(null);
   const intentionalSystemSseCloseRef = useRef(false);
+  const queueEventControllerRef = useRef<AbortController | null>(null);
+  const intentionalQueueSseCloseRef = useRef(false);
   const restorationStartedRef = useRef(false);
   const operationRestoreKeyRef = useRef('');
   const sessionPhaseRef = useRef(sessionPhase);
@@ -675,6 +679,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   }, [rememberLockLabel]);
 
   const reportInteraction = useCallback(() => {
+    if (sessionPhaseRef.current !== 'admitted') return false;
     const now = Date.now();
     if (lastActivityReportRef.current !== null && now - lastActivityReportRef.current < 30000) return false;
     lastActivityReportRef.current = now;
@@ -713,8 +718,15 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     controller?.abort();
   }, []);
 
+  const closeQueueEventStream = useCallback(() => {
+    intentionalQueueSseCloseRef.current = true;
+    const controller = queueEventControllerRef.current;
+    queueEventControllerRef.current = null;
+    controller?.abort();
+  }, []);
+
   const applyPortalSession = useCallback(
-    (response: PortalSessionResponse | Awaited<ReturnType<typeof getPortalQueue>>, fallbackUsername = '') => {
+    (response: PortalSessionResponse | PortalQueueResponse, fallbackUsername = '') => {
       const canonicalUsername = String(('username' in response ? response.username : '') || fallbackUsername).trim();
       if (!canonicalUsername) throw new Error('The backend did not return a portal username.');
       sessionStorage.setItem(PORTAL_USERNAME_SESSION_KEY, canonicalUsername);
@@ -737,6 +749,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
 
   const clearPortalSession = useCallback(() => {
     closeSystemEventStream();
+    closeQueueEventStream();
     sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
     useWarDeployStore.getState().resetWarDeployment();
     setValidated(false);
@@ -764,8 +777,9 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setValidationError('');
     setSessionPhase('anonymous');
     setSystemStatus('disconnected');
+    setQueueStreamStatus('disconnected');
     setSnapshotRevision(0);
-  }, [closeSystemEventStream, setViewingOperation, updateOperations]);
+  }, [closeQueueEventStream, closeSystemEventStream, setViewingOperation, updateOperations]);
 
   const changeUser = useCallback(async () => {
     if (sessionPhaseRef.current === 'loggingOut' || sessionPhaseRef.current === 'anonymous') return;
@@ -785,7 +799,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
 
   const handleBackendUnavailable = useCallback(() => {
     showSystemToast(BACKEND_OFFLINE_TOAST, 'warning');
-    if (sessionPhaseRef.current === 'queued' || sessionPhaseRef.current === 'admitted') setSystemStatus('reconnecting');
+    if (sessionPhaseRef.current === 'queued') setQueueStreamStatus('reconnecting');
+    else if (sessionPhaseRef.current === 'admitted') setSystemStatus('reconnecting');
   }, [showSystemToast]);
 
   const acceptUser = useCallback(
@@ -837,20 +852,68 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   }, [applyPortalSession, showSystemToast]);
 
   useEffect(() => {
-    if (sessionPhase !== 'queued') return undefined;
-    const refreshQueue = () => {
-      getPortalQueue()
-        .then((response) => applyPortalSession(response, username))
-        .catch((error) => {
-          if ((error as { status?: number })?.status !== 401 && isBackendUnavailable(error)) handleBackendUnavailable();
-        });
+    if (sessionPhase !== 'queued' || !username) return undefined;
+    let sessionEnded = false;
+    const controller = new AbortController();
+    intentionalQueueSseCloseRef.current = false;
+    queueEventControllerRef.current = controller;
+    setQueueStreamStatus('connecting');
+
+    void fetchEventSource(eventUrl('/users/queue/events'), {
+      method: 'GET',
+      headers: techDriveHeaders(username),
+      credentials: 'include',
+      signal: controller.signal,
+      openWhenHidden: true,
+      onopen: async (response) => {
+        if (response.status === 401) {
+          sessionEnded = true;
+          clearPortalSession();
+          throw new Error('Portal session ended');
+        }
+        if (!response.ok) throw new Error(`Queue event stream returned ${response.status}`);
+        setQueueStreamStatus('connected');
+      },
+      onmessage: (message) => {
+        if (message.event !== 'PORTAL_QUEUE_STATUS') return;
+        try {
+          const data = JSON.parse(message.data) as PortalSessionResponse;
+          applyPortalSession(data, username);
+          if (data.admissionStatus === 'ADMITTED') {
+            intentionalQueueSseCloseRef.current = true;
+            controller.abort();
+            setQueueStreamStatus('disconnected');
+          }
+        } catch {
+          /* ignore malformed queue status payloads */
+        }
+      },
+      onclose: () => {
+        if (intentionalQueueSseCloseRef.current || controller.signal.aborted) return;
+        handleBackendUnavailable();
+        setQueueStreamStatus('reconnecting');
+        throw new Error('Queue event stream closed');
+      },
+      onerror: () => {
+        if (intentionalQueueSseCloseRef.current || controller.signal.aborted) return;
+        if (sessionEnded) throw new Error('Portal session ended');
+        handleBackendUnavailable();
+        setQueueStreamStatus('reconnecting');
+        return 3000;
+      },
+    }).catch(() => {
+      if (controller.signal.aborted || sessionEnded) return;
+      setQueueStreamStatus('reconnecting');
+    });
+
+    return () => {
+      if (queueEventControllerRef.current === controller) queueEventControllerRef.current = null;
+      controller.abort();
     };
-    const timer = window.setInterval(refreshQueue, 5000);
-    return () => window.clearInterval(timer);
-  }, [applyPortalSession, handleBackendUnavailable, sessionPhase, username]);
+  }, [applyPortalSession, clearPortalSession, handleBackendUnavailable, sessionPhase, username]);
 
   useEffect(() => {
-    if (!admissionStatus || !username) return undefined;
+    if (admissionStatus !== 'ADMITTED' || !username) return undefined;
     const pointerOptions: AddEventListenerOptions = { passive: true };
     const visible = () => {
       if (document.visibilityState === 'visible') reportInteraction();
@@ -897,7 +960,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   }, [lockState.locks]);
 
   useEffect(() => {
-    if ((sessionPhase !== 'queued' && sessionPhase !== 'admitted') || !username) return undefined;
+    if (sessionPhase !== 'admitted' || !username) return undefined;
     let opened = false;
     let sessionEnded = false;
     const controller = new AbortController();
@@ -1273,6 +1336,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       reconcileProfileActivity,
       reconcileResourceActivity,
       systemStatus,
+      queueStreamStatus,
       snapshotRevision,
       lastSystemEvent,
       operations,
@@ -1312,6 +1376,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       reconcileProfileActivity,
       reconcileResourceActivity,
       systemStatus,
+      queueStreamStatus,
       snapshotRevision,
       lastSystemEvent,
       operations,

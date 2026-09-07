@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { usePortal } from '@/context/PortalContext';
 
 export default function QueuePage() {
-  const { username, queuePosition, onlineCount, maxOnlineUsers, onlineUsers, systemStatus, sessionPhase, changeUser } =
+  const { username, queuePosition, onlineCount, maxOnlineUsers, onlineUsers, queueStreamStatus, sessionPhase, changeUser } =
     usePortal();
   const loggingOut = sessionPhase === 'loggingOut';
 
@@ -19,8 +19,8 @@ export default function QueuePage() {
             </div>
             <CardTitle>You’re in the admission queue</CardTitle>
             <CardDescription>
-              The portal is currently at capacity. Keep this tab open; your place is preserved while the system stream remains
-              connected.
+              The portal is currently at capacity. Keep this tab open; your place is preserved while the queue connection
+              remains active.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -38,9 +38,9 @@ export default function QueuePage() {
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
               <span
-                className={`h-2 w-2 rounded-full ${systemStatus === 'connected' ? 'bg-green-500' : 'animate-pulse bg-amber-400'}`}
+                className={`h-2 w-2 rounded-full ${queueStreamStatus === 'connected' ? 'bg-green-500' : 'animate-pulse bg-amber-400'}`}
               />
-              Signed in as {username} · System stream {systemStatus}
+              Signed in as {username} · Queue connection {queueStreamStatus}
             </div>
             <Button type="button" variant="outline" className="gap-2" disabled={loggingOut} onClick={() => void changeUser()}>
               {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArchiveRestore,
   CheckSquare,
   ChevronRight,
   File,
@@ -12,7 +13,14 @@ import {
   Square,
   Trash2,
 } from 'lucide-react';
-import { deleteFiles, listFiles, renameFile } from '@/lib/contractApi';
+import {
+  EXTRACTION_UNCONFIRMED_MESSAGE,
+  type ApiRequestError,
+  deleteFiles,
+  extractFile,
+  listFiles,
+  renameFile,
+} from '@/lib/contractApi';
 import { Button } from '@/components/ui/button';
 import LockNotice from '@/components/LockNotice';
 import SearchableProfileSelect from '@/components/SearchableProfileSelect';
@@ -25,7 +33,7 @@ type SelectionChange =
   | { changes: Array<{ relative: string; entry: FileNode | undefined; selected: boolean }> };
 type FileBrowserProps = {
   rootKey: RootKey;
-  selectableExtension?: string;
+  selectableExtension?: string | string[];
   selectableType?: 'any' | 'file' | 'directory';
   selected?: string[];
   onSelectionChange?: (selected: string[], change: SelectionChange) => void;
@@ -37,6 +45,23 @@ type FileBrowserProps = {
 const joinRelative = (base: string, name: string): string => (base === '.' ? name : `${base.replace(/\\/g, '/')}/${name}`);
 const sortEntries = (items: FileNode[]): FileNode[] =>
   [...items].sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1));
+const archiveSuffixes = ['.tar.gz', '.zip', '.war', '.jar', '.7z'];
+const isArchive = (entry: FileNode): boolean =>
+  entry.type === 'file' && archiveSuffixes.some((suffix) => entry.name.toLocaleLowerCase().endsWith(suffix));
+
+function extractionErrorMessage(reason: unknown): string {
+  const error = reason as Partial<ApiRequestError>;
+  if (!error.status) return EXTRACTION_UNCONFIRMED_MESSAGE;
+  if (error.status === 413 || error.code === 'ARCHIVE_LIMIT_EXCEEDED')
+    return 'The archive exceeds a server extraction limit.';
+  if (error.status === 415 || error.code === 'UNSUPPORTED_ARCHIVE_FORMAT')
+    return 'This archive format is unsupported or has been disabled by the server.';
+  if (error.status === 422 || error.code === 'INVALID_ARCHIVE')
+    return 'The archive is corrupt, unsafe, encrypted, or uses an unsupported variant.';
+  if (error.code === 'ARCHIVE_CLEANUP_FAILED')
+    return 'Temporary extraction output could not be completely deleted. Administrator attention is required.';
+  return typeof error.message === 'string' && error.message ? error.message : errorMessage(reason, 'Unable to extract this archive.');
+}
 
 export default function FileBrowser({
   rootKey,
@@ -55,6 +80,10 @@ export default function FileBrowser({
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [extractingPath, setExtractingPath] = useState<string | null>(null);
+  const [extractedPath, setExtractedPath] = useState<string | null>(null);
+  const [extractionError, setExtractionError] = useState<ApiRequestError | null>(null);
+  const [extractionSuccess, setExtractionSuccess] = useState('');
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renamedPaths, setRenamedPaths] = useState<Set<string>>(() => new Set());
   const [refresh, setRefresh] = useState(0);
@@ -105,13 +134,22 @@ export default function FileBrowser({
     const row = listRef.current?.querySelector(`[data-path="${CSS.escape(firstSelectedRelative)}"]`);
     row?.scrollIntoView({ block: 'nearest' });
   }, [firstSelectedRelative, loading]);
-  const interactionDisabled = disabled || deleting || !!renamingPath;
+  useEffect(() => {
+    if (loading || !extractedPath) return;
+    const row = listRef.current?.querySelector(`[data-path="${CSS.escape(extractedPath)}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+  }, [extractedPath, loading]);
+  const interactionDisabled = disabled || deleting || !!renamingPath || !!extractingPath;
   const supportsDelete = rootKey === 'techDrive' || rootKey === 'qc';
   const supportsRename = true;
   const deleteLock = supportsDelete ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
   const entryDetails = (entry: FileNode) => {
     const isDirectory = entry.type === 'directory';
-    const extensionAllowed = !selectableExtension || entry.name.toLowerCase().endsWith(selectableExtension.toLowerCase());
+    const extensionAllowed =
+      !selectableExtension ||
+      (Array.isArray(selectableExtension) ? selectableExtension : [selectableExtension]).some((extension) =>
+        entry.name.toLowerCase().endsWith(extension.toLowerCase()),
+      );
     const typeAllowed =
       selectableType === 'directory'
         ? isDirectory
@@ -132,11 +170,17 @@ export default function FileBrowser({
   });
   const navigateCrumb = (index: number) => {
     setActionError('');
+    setExtractionError(null);
+    setExtractionSuccess('');
+    setExtractedPath(null);
     setFileNameFilter('');
     setPath(index < 0 ? '.' : crumbs.slice(0, index + 1).join('/'));
   };
   const openDirectory = (relative: string) => {
     setActionError('');
+    setExtractionError(null);
+    setExtractionSuccess('');
+    setExtractedPath(null);
     setFileNameFilter('');
     setPath(relative);
   };
@@ -220,6 +264,27 @@ export default function FileBrowser({
       setActionError(errorMessage(reason));
     } finally {
       setRenamingPath(null);
+    }
+  };
+  const extractEntry = async (entry: FileNode, relative: string) => {
+    if (extractingPath || interactionDisabled || entry.locked || !isArchive(entry)) return;
+    setExtractingPath(relative);
+    setActionError('');
+    setExtractionError(null);
+    setExtractionSuccess('');
+    setExtractedPath(null);
+    try {
+      const result = await extractFile({ rootKey, path: relative });
+      setExtractedPath(result.destinationPath);
+      setExtractionSuccess(`Extracted to ${result.destinationPath}`);
+      setRefresh((value) => value + 1);
+    } catch (reason: unknown) {
+      const requestError = reason as ApiRequestError;
+      setExtractionError(requestError.status === 423 ? requestError : null);
+      setActionError(extractionErrorMessage(reason));
+      if (requestError.status === 404 || requestError.code === 'SOURCE_NOT_FOUND') setRefresh((value) => value + 1);
+    } finally {
+      setExtractingPath(null);
     }
   };
 
@@ -310,10 +375,22 @@ export default function FileBrowser({
         </div>
       </div>
       <LockNotice lock={deleteLock} />
+      <p className="border-b border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        Extracting creates a sibling folder without the archive suffix. Existing names receive _2, _3, and so on; nothing is overwritten.
+      </p>
+      {extractionSuccess && (
+        <div role="status" className="border-b border-border bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {extractionSuccess}
+        </div>
+      )}
       {actionError && (
-        <div role="alert" className="flex items-center gap-2 border-b border-border bg-red-50 px-3 py-2 text-sm text-red-700">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          {actionError}
+        <div role="alert" className="border-b border-border bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            {actionError}
+          </div>
+          {extractionError?.users?.length ? <div className="mt-1">Users: {extractionError.users.join(', ')}</div> : null}
+          {extractionError?.paths?.length ? <div className="mt-1 font-mono text-xs">{extractionError.paths.join(', ')}</div> : null}
         </div>
       )}
       <div ref={listRef} data-testid="file-browser-list" className="max-h-[500px] overflow-y-auto">
@@ -346,11 +423,14 @@ export default function FileBrowser({
             const relative = joinRelative(path, entry.name);
             const { isDirectory, selectionAllowed } = entryDetails(entry);
             const visuallyAllowed = isDirectory || selectionAllowed;
+            const extractable = isArchive(entry);
             return (
               <div
                 key={relative}
                 data-path={relative}
-                className={`flex items-center gap-3 px-3 py-2.5 border-t border-border first:border-t-0 ${visuallyAllowed ? 'hover:bg-muted' : 'opacity-45'}`}
+                className={`flex items-center gap-3 px-3 py-2.5 border-t border-border first:border-t-0 ${
+                  extractedPath === relative ? 'bg-emerald-50' : visuallyAllowed ? 'hover:bg-muted' : 'opacity-45'
+                }`}
               >
                 {onSelectionChange && (
                   <input
@@ -397,6 +477,25 @@ export default function FileBrowser({
                   <span title={entry.lockMode || 'Locked'}>
                     <Lock className="w-3.5 h-3.5 text-amber-600" />
                   </span>
+                )}
+                {extractable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 shrink-0 p-0 text-xs lg:w-auto lg:gap-1 lg:px-2"
+                    aria-label={`${extractingPath === relative ? 'Extracting' : 'Extract here'} ${entry.name}`}
+                    title={extractingPath === relative ? 'Extracting…' : 'Extract here'}
+                    disabled={interactionDisabled || entry.locked}
+                    onClick={() => void extractEntry(entry, relative)}
+                  >
+                    {extractingPath === relative ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ArchiveRestore className="h-3.5 w-3.5" />
+                    )}
+                    <span className="hidden lg:inline">{extractingPath === relative ? 'Extracting…' : 'Extract here'}</span>
+                  </Button>
                 )}
                 <span className="hidden sm:block w-28 text-right text-xs text-muted-foreground">
                   {entry.lastModified ? new Date(entry.lastModified).toLocaleString() : '—'}
