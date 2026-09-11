@@ -13,6 +13,15 @@ vi.mock('@/lib/contractApi', () => ({
   extractFile,
   listFiles,
   renameFile,
+  preflightFileMove: vi.fn(),
+  moveFiles: vi.fn(),
+  isLockConflict: (error: unknown) =>
+    typeof error === 'object' && error !== null && (error as { status?: number }).status === 423,
+}));
+
+vi.mock('@/components/FileMoveDrawer', () => ({
+  default: ({ open, sourcePaths }: { open: boolean; sourcePaths: string[] }) =>
+    open ? <div data-testid="file-move-drawer">Moving {sourcePaths.length}</div> : null,
 }));
 
 import FileBrowser from './FileBrowser';
@@ -444,15 +453,73 @@ describe('FileBrowser selectableType', () => {
     expect(await screen.findByTitle('Rename')).toHaveClass('text-blue-600');
     expect(screen.getByTestId('selected-paths')).toHaveTextContent('renamed.xml');
   });
+
+  it('shows Move only when enableMove is set and opens the drawer for selected items', async () => {
+    listFiles.mockResolvedValue([{ name: 'available.xml', type: 'file' }]);
+    const user = userEvent.setup();
+    render(
+      <StatefulFileBrowser initialSelected={['available.xml']} enableMove showSelectAll />,
+    );
+
+    const move = await screen.findByRole('button', { name: 'Move' });
+    expect(move).toBeEnabled();
+    await user.click(move);
+    expect(await screen.findByTestId('file-move-drawer')).toHaveTextContent('Moving 1');
+  });
+
+  it('hides Move by default even on mutating roots', async () => {
+    listFiles.mockResolvedValue([{ name: 'available.xml', type: 'file' }]);
+    render(<FileBrowser rootKey="techDrive" selected={['available.xml']} onSelectionChange={vi.fn()} />);
+    await screen.findByText('available.xml');
+    expect(screen.queryByRole('button', { name: 'Move' })).not.toBeInTheDocument();
+  });
+
+  it('starts at basePath and keeps Home from navigating above it', async () => {
+    listFiles
+      .mockResolvedValueOnce([{ name: 'deployments', type: 'directory' }])
+      .mockResolvedValueOnce([{ name: 'app.war', type: 'file' }])
+      .mockResolvedValueOnce([{ name: 'deployments', type: 'directory' }]);
+    const onPathChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FileBrowser
+        rootKey="qc"
+        basePath="wildfly/CoinDCX"
+        selectableType="directory"
+        selected={[]}
+        onSelectionChange={vi.fn()}
+        onPathChange={onPathChange}
+      />,
+    );
+
+    expect(await screen.findByRole('button', { name: 'deployments' })).toBeVisible();
+    await waitFor(() => expect(onPathChange).toHaveBeenCalledWith('wildfly/CoinDCX'));
+    expect(listFiles).toHaveBeenCalledWith('qc', 'wildfly/CoinDCX', expect.any(AbortSignal));
+
+    await user.click(screen.getByRole('button', { name: 'deployments' }));
+    await waitFor(() => expect(onPathChange).toHaveBeenCalledWith('wildfly/CoinDCX/deployments'));
+    expect(screen.getByRole('button', { name: 'deployments' })).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Go to root directory' }));
+    await waitFor(() => expect(onPathChange).toHaveBeenCalledWith('wildfly/CoinDCX'));
+    expect(await screen.findByRole('button', { name: 'deployments' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'wildfly' })).not.toBeInTheDocument();
+  });
 });
 
 type StatefulFileBrowserProps = {
   initialSelected: string[];
   selectableType?: ComponentProps<typeof FileBrowser>['selectableType'];
   showSelectAll?: boolean;
+  enableMove?: boolean;
 };
 
-function StatefulFileBrowser({ initialSelected, selectableType = 'any', showSelectAll = false }: StatefulFileBrowserProps) {
+function StatefulFileBrowser({
+  initialSelected,
+  selectableType = 'any',
+  showSelectAll = false,
+  enableMove = false,
+}: StatefulFileBrowserProps) {
   const [selected, setSelected] = useState(initialSelected);
   return (
     <>
@@ -460,6 +527,7 @@ function StatefulFileBrowser({ initialSelected, selectableType = 'any', showSele
         rootKey="techDrive"
         selectableType={selectableType}
         showSelectAll={showSelectAll}
+        enableMove={enableMove}
         selected={selected}
         onSelectionChange={setSelected}
       />

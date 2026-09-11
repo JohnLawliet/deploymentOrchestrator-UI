@@ -13,8 +13,11 @@ import type {
   DeploymentStartResponse,
   ExtractRequest,
   ExtractResponse,
+  FileMovePreflightResponse,
+  FileMoveResult,
   FileNode,
   FileRoot,
+  MoveRequest,
   JarCatalogueResponse,
   JarDeploymentRequest,
   JarBatFetchResponse,
@@ -71,7 +74,8 @@ const backendOrigin = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, ''
 const apiBaseUrl = `${backendOrigin}${apiContextPath}/api`;
 export const BACKEND_OFFLINE_MESSAGE = 'The backend is offline. Try again when the service is available.';
 export const BACKEND_OFFLINE_TOAST = 'The backend is offline.';
-export const DOWNLOAD_INTERRUPTED_MESSAGE = 'Download interrupted. The service may still be available; please retry.';
+export const DOWNLOAD_INCOMPLETE_MESSAGE = 'Download failed or incomplete; please retry';
+export const DOWNLOAD_INTERRUPTED_MESSAGE = DOWNLOAD_INCOMPLETE_MESSAGE;
 export const EXTRACTION_UNCONFIRMED_MESSAGE =
   'The extraction result could not be confirmed. Refresh the directory before trying again.';
 
@@ -193,14 +197,29 @@ async function request<T>(
   }
 }
 
+function expectedBlobContentLength(headers: AxiosResponse<Blob>['headers']): number | null {
+  const raw = headers?.['content-length'];
+  if (raw == null || raw === '') return null;
+  const text = String(Array.isArray(raw) ? raw[0] : raw).trim();
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) return null;
+  return value;
+}
+
 async function blobRequest(promise: Promise<AxiosResponse<Blob>>): Promise<DownloadResult> {
   try {
     const response = await promise;
+    const expectedLength = expectedBlobContentLength(response.headers);
+    if (expectedLength != null && response.data.size !== expectedLength) {
+      throw new Error(DOWNLOAD_INCOMPLETE_MESSAGE);
+    }
     const disposition = response.headers['content-disposition'] || '';
     const utfName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
     const plainName = disposition.match(/filename="?([^";]+)"?/i);
     return { blob: response.data, filename: decodeURIComponent(utfName?.[1] || plainName?.[1] || 'download') };
   } catch (error: unknown) {
+    if (error instanceof Error && error.message === DOWNLOAD_INCOMPLETE_MESSAGE) throw error;
     let parsedBody: unknown;
     const responseBody = axios.isAxiosError(error) ? error.response?.data : undefined;
     if (responseBody instanceof Blob) {
@@ -211,7 +230,7 @@ async function blobRequest(promise: Promise<AxiosResponse<Blob>>): Promise<Downl
       }
     }
     if (axios.isCancel(error) || (isRecord(error) && error.request != null && error.response == null)) {
-      throw new Error(DOWNLOAD_INTERRUPTED_MESSAGE);
+      throw new Error(DOWNLOAD_INCOMPLETE_MESSAGE);
     }
     const result = normalizedError(error, 'Download failed', parsedBody);
     if (result.status === 423) lockConflictListeners.forEach((listener) => listener(result));
@@ -417,6 +436,16 @@ export const extractFile = async (payload: ExtractRequest): Promise<ExtractRespo
     throw error;
   }
 };
+export const preflightFileMove = (payload: MoveRequest, signal?: AbortSignal): Promise<FileMovePreflightResponse> =>
+  request<FileMovePreflightResponse>(
+    client.post<FileMovePreflightResponse>('/files/move/preflight', payload, { signal }),
+    'Unable to prepare the file move',
+  );
+export const moveFiles = (payload: MoveRequest, signal?: AbortSignal): Promise<FileMoveResult> =>
+  request<FileMoveResult>(
+    client.post<FileMoveResult>('/files/move', payload, { signal, timeout: 0 }),
+    'Unable to move the selected items',
+  );
 export const preflightUatBuild = (payload: UatPreflightRequest, signal?: AbortSignal): Promise<UatPreflightResponse> =>
   request<UatPreflightResponse>(
     client.post<UatPreflightResponse>('/uat-builds/preflight', payload, { signal }),

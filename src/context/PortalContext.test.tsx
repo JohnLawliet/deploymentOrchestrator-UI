@@ -714,3 +714,79 @@ describe('operation terminal availability', () => {
     ).toBe(false);
   });
 });
+
+describe('file-move OPERATION_PROGRESS parsing', () => {
+  it('accepts FileMoveProgressDto resources without classic status/component fields', () => {
+    const event = parseSseEvent({
+      id: '',
+      event: 'OPERATION_PROGRESS',
+      data: JSON.stringify(
+        systemEvent({
+          eventType: 'OPERATION_PROGRESS',
+          deploymentId: 'move-1',
+          resourceType: 'FILE',
+          resourceKey: 'FILE:qc->qc',
+          username: 'alice',
+          resources: {
+            operationId: 'move-1',
+            totalCount: 2,
+            completedCount: 1,
+            failedCount: 0,
+            pendingCount: 1,
+            progressPercentage: 50,
+            currentSourcePath: 'lib/a.jar',
+            currentDestinationPath: 'backup/a.jar',
+            phaseCode: 'FILE_MOVE_ITEM_COMPLETED',
+            completed: [
+              {
+                sourceRootKey: 'qc',
+                sourcePath: 'lib/a.jar',
+                destinationRootKey: 'qc',
+                destinationPath: 'backup/a.jar',
+                status: 'COMPLETED',
+                message: null,
+              },
+            ],
+            failed: [],
+            pending: [
+              {
+                sourceRootKey: 'qc',
+                sourcePath: 'lib/b.jar',
+                destinationRootKey: 'qc',
+                destinationPath: 'backup/b.jar',
+                status: 'PENDING',
+                message: null,
+              },
+            ],
+          },
+        }),
+      ),
+    });
+
+    expect(event).toMatchObject({
+      eventType: 'OPERATION_PROGRESS',
+      resourceType: 'FILE',
+      resources: { operationId: 'move-1', phaseCode: 'FILE_MOVE_ITEM_COMPLETED', completedCount: 1 },
+    });
+  });
+
+  it('still accepts classic WAR/JAR progress payloads', () => {
+    const event = parseSseEvent({
+      id: '',
+      event: 'OPERATION_PROGRESS',
+      data: JSON.stringify(
+        systemEvent({
+          eventType: 'OPERATION_PROGRESS',
+          deploymentId: 'deployment-1',
+          resourceType: 'WILDFLY_PROFILE',
+          resources: { phaseCode: 'DEPLOYING', status: 'RUNNING', progressPercentage: 40, component: 'war' },
+        }),
+      ),
+    });
+
+    expect(event).toMatchObject({
+      eventType: 'OPERATION_PROGRESS',
+      resources: { phaseCode: 'DEPLOYING', status: 'RUNNING', component: 'war' },
+    });
+  });
+});

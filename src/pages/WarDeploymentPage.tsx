@@ -429,7 +429,7 @@ export default function WarDeploymentPage() {
   return (
     <Page
       title="Deploy WAR"
-      description="Reserve a WildFly profile, validate an existing Tech Drive WAR, and deploy it."
+      description="Reserve a WildFly profile, validate an existing Tech Drive WAR or ZIP archive, and deploy it."
       headerAction={
         <PageTutorial
           steps={warTutorialSteps}
@@ -541,10 +541,10 @@ export default function WarDeploymentPage() {
             </div>
             <div data-tour="war-source-config">
               <div>
-                <p className="text-sm font-medium mb-2">WAR from Tech Drive</p>
+                <p className="text-sm font-medium mb-2">WAR or archive from Tech Drive</p>
                 <FileBrowser
                   rootKey="techDrive"
-                  selectableExtension=".war"
+                  selectableExtension={['.war', '.zip']}
                   selected={displaySource}
                   onSelectionChange={(items) => {
                     if (!tutorialActive) invalidateAnd(store.setSource, items.slice(-1));
@@ -555,11 +555,12 @@ export default function WarDeploymentPage() {
                     Selected: <span className="font-mono text-foreground">{displaySource[0]}</span>
                   </FormDescription>
                 ) : (
-                  <FormMessage className="mt-2">Select one .war file.</FormMessage>
+                  <FormMessage className="mt-2">Select one .war or .zip file.</FormMessage>
                 )}
               </div>
               <AdditionalConfigRequiredField
                 className="mt-5"
+                sourceLabel="archive"
                 checked={displayAdditionalConfigRequired}
                 disabled={tutorialActive}
                 onCheckedChange={(checked) => invalidateAnd(store.setAdditionalConfigRequired, checked)}

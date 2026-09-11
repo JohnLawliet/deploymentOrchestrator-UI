@@ -58,7 +58,7 @@ export default function DownloadsPage() {
   return (
     <Page
       title="Download files"
-      description="Browse within the QC filesystem root and download files or streamed ZIP selections."
+      description="Browse within the QC filesystem root and download files or ZIP selections prepared on the server."
       headerAction={<PageTutorial steps={downloadsTutorialSteps} />}
     >
       <Card>
@@ -95,12 +95,20 @@ export default function DownloadsPage() {
               </Button>
             </Notice>
           )}
-          {Boolean(error) && !lockError && <Notice tone="error">{errorText}</Notice>}
+          {Boolean(error) && !lockError && (
+            <Notice tone="error">
+              <div>{errorText}</div>
+              <Button variant="outline" size="sm" className="mt-3" onClick={download}>
+                Retry download
+              </Button>
+            </Notice>
+          )}
           <LockNotice lock={downloadLock} />
           <div data-tour="download-browser">
             <FileBrowser
               rootKey="qc"
               showSelectAll
+              enableMove
               selected={selected}
               onSelectionChange={(items, change) => {
                 setSelected(items);

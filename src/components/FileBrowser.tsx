@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArchiveRestore,
@@ -6,6 +6,7 @@ import {
   ChevronRight,
   File,
   Folder,
+  FolderInput,
   Home,
   Loader2,
   Lock,
@@ -26,7 +27,9 @@ import LockNotice from '@/components/LockNotice';
 import SearchableProfileSelect from '@/components/SearchableProfileSelect';
 import { useOptionalPortal } from '@/context/PortalContext';
 import { errorMessage } from '@/types/frontend';
-import type { FileNode, RootKey } from '@/types/api-contracts';
+import type { FileMoveResult, FileNode, RootKey } from '@/types/api-contracts';
+
+const FileMoveDrawer = lazy(() => import('@/components/FileMoveDrawer'));
 
 type SelectionChange =
   | { relative: string; entry: FileNode | undefined; selected: boolean }
@@ -40,9 +43,18 @@ type FileBrowserProps = {
   refreshToken?: number;
   disabled?: boolean;
   showSelectAll?: boolean;
+  enableMove?: boolean;
+  enableDelete?: boolean;
+  onPathChange?: (path: string) => void;
+  /** Floor for navigation; Home and crumbs cannot go above this root-relative path. */
+  basePath?: string;
 };
 
 const joinRelative = (base: string, name: string): string => (base === '.' ? name : `${base.replace(/\\/g, '/')}/${name}`);
+const normalizeRelativePath = (value: string): string => {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
+  return !normalized || normalized === '.' ? '.' : normalized;
+};
 const sortEntries = (items: FileNode[]): FileNode[] =>
   [...items].sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1));
 const archiveSuffixes = ['.tar.gz', '.zip', '.war', '.jar', '.7z'];
@@ -72,9 +84,14 @@ export default function FileBrowser({
   refreshToken = 0,
   disabled = false,
   showSelectAll = false,
+  enableMove,
+  enableDelete,
+  onPathChange,
+  basePath = '.',
 }: FileBrowserProps) {
   const portal = useOptionalPortal();
-  const [path, setPath] = useState('.');
+  const floor = normalizeRelativePath(basePath);
+  const [path, setPath] = useState(floor);
   const [entries, setEntries] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -88,6 +105,7 @@ export default function FileBrowser({
   const [renamedPaths, setRenamedPaths] = useState<Set<string>>(() => new Set());
   const [refresh, setRefresh] = useState(0);
   const [fileNameFilter, setFileNameFilter] = useState('');
+  const [moveOpen, setMoveOpen] = useState(false);
   const knownEntries = useRef(new Map<string, FileNode>());
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -113,13 +131,22 @@ export default function FileBrowser({
     knownEntries.current.clear();
     setFileNameFilter('');
     setRenamedPaths(new Set());
-  }, [rootKey]);
+    setPath(floor);
+  }, [rootKey, floor]);
   useEffect(() => {
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
   }, [load, refresh, refreshToken]);
-  const crumbs = useMemo(() => (path === '.' ? [] : path.split('/')), [path]);
+  useEffect(() => {
+    onPathChange?.(path);
+  }, [path, onPathChange]);
+  const crumbs = useMemo(() => {
+    if (path === '.' || path === floor) return [];
+    if (floor === '.') return path.split('/');
+    if (!path.startsWith(`${floor}/`)) return [];
+    return path.slice(floor.length + 1).split('/').filter(Boolean);
+  }, [floor, path]);
   const filteredEntries = useMemo(() => {
     const normalizedFilter = fileNameFilter.trim().toLocaleLowerCase();
     if (!normalizedFilter) return entries;
@@ -139,10 +166,12 @@ export default function FileBrowser({
     const row = listRef.current?.querySelector(`[data-path="${CSS.escape(extractedPath)}"]`);
     row?.scrollIntoView({ block: 'nearest' });
   }, [extractedPath, loading]);
-  const interactionDisabled = disabled || deleting || !!renamingPath || !!extractingPath;
-  const supportsDelete = rootKey === 'techDrive' || rootKey === 'qc';
+  const interactionDisabled = disabled || deleting || !!renamingPath || !!extractingPath || moveOpen;
+  const mutatingRoot = rootKey === 'techDrive' || rootKey === 'qc';
+  const supportsDelete = enableDelete ?? mutatingRoot;
+  const supportsMove = (enableMove ?? false) && mutatingRoot;
   const supportsRename = true;
-  const deleteLock = supportsDelete ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
+  const deleteLock = supportsDelete || supportsMove ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
   const entryDetails = (entry: FileNode) => {
     const isDirectory = entry.type === 'directory';
     const extensionAllowed =
@@ -174,7 +203,12 @@ export default function FileBrowser({
     setExtractionSuccess('');
     setExtractedPath(null);
     setFileNameFilter('');
-    setPath(index < 0 ? '.' : crumbs.slice(0, index + 1).join('/'));
+    if (index < 0) {
+      setPath(floor);
+      return;
+    }
+    const belowFloor = crumbs.slice(0, index + 1).join('/');
+    setPath(floor === '.' ? belowFloor : `${floor}/${belowFloor}`);
   };
   const openDirectory = (relative: string) => {
     setActionError('');
@@ -287,6 +321,22 @@ export default function FileBrowser({
       setExtractingPath(null);
     }
   };
+  const handleMoveFinished = (result: FileMoveResult | null) => {
+    const moved = new Set((result?.completed || []).map((item) => item.sourcePath));
+    if (moved.size && onSelectionChange) {
+      const remaining = selected.filter((relative) => !moved.has(relative));
+      const changes = selected
+        .filter((relative) => moved.has(relative))
+        .map((relative) => ({
+          relative,
+          entry: knownEntries.current.get(relative),
+          selected: false,
+        }));
+      onSelectionChange(remaining, { changes });
+      moved.forEach((relative) => knownEntries.current.delete(relative));
+    }
+    setRefresh((value) => value + 1);
+  };
 
   return (
     <div className="rounded-lg border border-border overflow-hidden">
@@ -346,6 +396,22 @@ export default function FileBrowser({
               {allVisibleSelected ? 'Unselect all' : 'Select all'}
             </Button>
           )}
+          {supportsMove && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={interactionDisabled || !deletableSelections.length || !!deleteLock}
+              onClick={() => {
+                setActionError('');
+                setMoveOpen(true);
+              }}
+            >
+              <FolderInput className="w-3.5 h-3.5" />
+              Move
+            </Button>
+          )}
           {supportsDelete && (
             <Button
               type="button"
@@ -359,7 +425,7 @@ export default function FileBrowser({
               {deleting ? 'Deleting…' : 'Delete'}
             </Button>
           )}
-          <Button
+          {/* <Button
             type="button"
             aria-label="Refresh directory"
             variant="ghost"
@@ -371,13 +437,10 @@ export default function FileBrowser({
             }}
           >
             <RefreshCw className="w-3.5 h-3.5" />
-          </Button>
+          </Button> */}
         </div>
       </div>
       <LockNotice lock={deleteLock} />
-      <p className="border-b border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-        Extracting creates a sibling folder without the archive suffix. Existing names receive _2, _3, and so on; nothing is overwritten.
-      </p>
       {extractionSuccess && (
         <div role="status" className="border-b border-border bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {extractionSuccess}
@@ -507,6 +570,17 @@ export default function FileBrowser({
             );
           })}
       </div>
+      {supportsMove && moveOpen && (
+        <Suspense fallback={null}>
+          <FileMoveDrawer
+            open={moveOpen}
+            sourceRootKey={rootKey}
+            sourcePaths={deletableSelections}
+            onClose={() => setMoveOpen(false)}
+            onFinished={handleMoveFinished}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

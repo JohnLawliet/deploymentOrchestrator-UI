@@ -306,9 +306,18 @@ const isSystemEvent = (value: unknown): value is SystemEvent => {
       return (
         isRecord(resources) &&
         typeof resources.phaseCode === 'string' &&
-        typeof resources.status === 'string' &&
-        isNullableNumber(resources.progressPercentage) &&
-        isNullableString(resources.component)
+        ((typeof resources.status === 'string' &&
+          isNullableNumber(resources.progressPercentage) &&
+          isNullableString(resources.component)) ||
+          (typeof resources.operationId === 'string' &&
+            typeof resources.totalCount === 'number' &&
+            typeof resources.completedCount === 'number' &&
+            typeof resources.failedCount === 'number' &&
+            typeof resources.pendingCount === 'number' &&
+            typeof resources.progressPercentage === 'number' &&
+            Array.isArray(resources.completed) &&
+            Array.isArray(resources.failed) &&
+            Array.isArray(resources.pending)))
       );
     case 'USER_PRESENCE_CHANGED':
       return isRecord(resources) && typeof resources.username === 'string' && typeof resources.status === 'string';
@@ -1098,6 +1107,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         }
         if (event.eventType === 'OPERATION_PROGRESS') {
           if (!isOwnedOperationEvent(event, username, operationsRef.current)) return;
+          if (eventResourceType(event) === 'FILE') {
+            setLastSystemEvent(event);
+            return;
+          }
           const eventDeploymentId = String(event.deploymentId || '');
           if (!eventDeploymentId) return;
           const viewedDeploymentId = deploymentIdOf(viewingOperationRef.current);
@@ -1110,14 +1123,14 @@ export function PortalProvider({ children }: { children: ReactNode }) {
               : '';
           if (!trackedOperationId) return;
           updateOperations((current) => reduceTrackedOperationProgress(current, trackedOperationId, event));
-          if (event.resources?.status === 'FAILED' && eventResourceType(event) === 'WILDFLY_PROFILE') {
+          if (event.resources && 'status' in event.resources && event.resources.status === 'FAILED' && eventResourceType(event) === 'WILDFLY_PROFILE') {
             const profileId = eventProfileId(event);
             void Promise.all([
               reconcileResourceActivity(`WILDFLY_PROFILE:${profileId}`).catch(() => null),
               reconcileProfileActivity(profileId).catch(() => null),
             ]);
           }
-          if (event.resources?.status === 'COMPLETED') setLastSystemEvent(event);
+          if (event.resources && 'status' in event.resources && event.resources.status === 'COMPLETED') setLastSystemEvent(event);
           return;
         }
         if (UPLOAD_EVENT_TYPES.has(event.eventType)) {

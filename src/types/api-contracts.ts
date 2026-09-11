@@ -92,6 +92,78 @@ export interface ExtractResponse {
   sourcePath: string;
   destinationPath: string;
 }
+export interface MoveSource {
+  rootKey: RootKey;
+  paths: string[];
+}
+export interface MoveDestination {
+  rootKey: RootKey;
+  path: string;
+}
+export interface MoveRequest {
+  source: MoveSource;
+  destination: MoveDestination;
+  overwriteConfirmed?: boolean;
+  /** Omit for same-root plain move. Never send NONE for qc→techDrive. */
+  archiveFormat?: 'NONE' | 'ZIP' | 'WAR' | 'JAR';
+}
+export interface FileMovePlanEntry {
+  sourceRootKey: RootKey;
+  sourcePath: string;
+  destinationRootKey: RootKey;
+  destinationPath: string;
+  overwrite: boolean;
+}
+export interface FileMoveConflict {
+  sourceRootKey: RootKey;
+  sourcePath: string;
+  destinationRootKey: RootKey;
+  destinationPath: string;
+  name: string;
+}
+export interface FileMovePreflightResponse {
+  totalCount: number;
+  moves: FileMovePlanEntry[];
+  conflicts: FileMoveConflict[];
+  adminRequired: boolean;
+}
+export interface FileMoveItemOutcome {
+  sourceRootKey: RootKey;
+  sourcePath: string;
+  destinationRootKey: RootKey;
+  destinationPath: string;
+  status: 'PENDING' | 'COMPLETED' | 'FAILED' | string;
+  message: string | null;
+}
+export interface FileMoveResult {
+  operationId: string;
+  totalCount: number;
+  completed: FileMoveItemOutcome[];
+  failed: FileMoveItemOutcome[];
+}
+export type FileMovePhaseCode =
+  | 'FILE_MOVE_STARTED'
+  | 'FILE_MOVE_CREATING_TEMP'
+  | 'FILE_MOVE_ZIPPING'
+  | 'FILE_MOVE_TRANSFERRING'
+  | 'FILE_MOVE_DELETING_TEMP'
+  | 'FILE_MOVE_ITEM_COMPLETED'
+  | 'FILE_MOVE_ITEM_FAILED'
+  | string;
+export interface FileMoveProgressDto {
+  operationId: string;
+  totalCount: number;
+  completedCount: number;
+  failedCount: number;
+  pendingCount: number;
+  progressPercentage: number;
+  currentSourcePath: string | null;
+  currentDestinationPath: string | null;
+  phaseCode: FileMovePhaseCode;
+  completed: FileMoveItemOutcome[];
+  failed: FileMoveItemOutcome[];
+  pending: FileMoveItemOutcome[];
+}
 
 export interface LockInfo {
   resourceKey: string;
@@ -176,6 +248,7 @@ export interface WarDeploymentRequest {
   application: string;
   profileId: string;
   sourceRootKey: RootKey;
+  /** Tech Drive source archive path; UI accepts .war or .zip with WAR-layout contents. */
   sourcePath: string;
   datasourceOverride?: WildFlyDatasource | null;
   additionalConfigRequired: boolean;
@@ -604,7 +677,7 @@ export type SystemEvent =
   | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'FRONTEND_ASSOCIATION_UPDATED'; resources: FrontendAssociationUpdated })
   | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'RUNTIME_RECONCILIATION_ISSUES'; resources: unknown[] })
   | (SystemEventFields & { scope: 'SYSTEM'; eventType: 'RUNTIME_RECONCILIATION_RECOVERED'; resources: null })
-  | (SystemEventFields & { eventType: 'OPERATION_PROGRESS'; resources: OperationProgress })
+  | (SystemEventFields & { eventType: 'OPERATION_PROGRESS'; resources: OperationProgress | FileMoveProgressDto })
   | (SystemEventFields & { eventType: 'USER_PRESENCE_CHANGED'; resources: UserPresence })
   | (SystemEventFields & {
       eventType: 'LOCK_CHANGED';
@@ -672,6 +745,8 @@ export interface ApiRoutes {
   'DELETE /api/files': { body: DeleteRequest; response: void; status: 204 };
   'POST /api/files/rename': { body: RenameRequest; response: void };
   'POST /api/files/extract': { body: ExtractRequest; response: ExtractResponse };
+  'POST /api/files/move/preflight': { body: MoveRequest; response: FileMovePreflightResponse };
+  'POST /api/files/move': { body: MoveRequest; response: FileMoveResult };
   'GET /api/logs': { query: { applicationName: string; date?: string }; response: Blob };
   'GET /api/dashboard/war-applications': {
     response: Array<{ application: string; warFileName: string; environments: string[] }>;

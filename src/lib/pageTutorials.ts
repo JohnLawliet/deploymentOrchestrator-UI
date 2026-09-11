@@ -24,10 +24,10 @@ export const warTutorialSteps: TutorialStep[] = [
   },
   {
     target: '[data-tour="war-source-config"]',
-    title: 'Choose the WAR and additional configuration',
+    title: 'Choose the archive and additional configuration',
     instruction:
-      'This is your Tech Drive folder. Select the WAR file to deploy and check Apply additional WAR configuration. Adding properties, filters, or servlets does not break an existing QC profile after web.xml or .properties files are replaced. To modify an existing property, filter, or servlet, place a correctly formatted additionalConfig.toml in the same directory as the WAR.',
-    why: 'The selected Tech Drive path tells the backend which WAR to validate and deploy.',
+      'This is your Tech Drive folder. Select a .war or .zip archive to deploy and check Apply additional archive configuration. Adding properties, filters, or servlets does not break an existing QC profile after web.xml or .properties files are replaced. To modify an existing property, filter, or servlet, place a correctly formatted additionalConfig.toml in the same directory as the archive.',
+    why: 'The selected Tech Drive path tells the backend which archive to validate and deploy.',
   },
   {
     target: '[data-tour="war-preflight-toggle"]',
@@ -268,6 +268,6 @@ export const downloadsTutorialSteps: TutorialStep[] = [
     target: '[data-tour="download-action"]',
     title: 'Download the selection',
     instruction: 'Select Download selection after choosing one or more items.',
-    why: 'One selected file downloads directly; directories or multiple items are safely returned as a streamed ZIP archive.',
+    why: 'One selected file downloads directly; directories or multiple items are returned as a ZIP archive prepared on the server before transfer.',
   },
 ];

@@ -37,6 +37,7 @@ vi.mock('axios', () => ({
 
 import {
   BACKEND_OFFLINE_MESSAGE,
+  DOWNLOAD_INCOMPLETE_MESSAGE,
   DOWNLOAD_INTERRUPTED_MESSAGE,
   EXTRACTION_UNCONFIRMED_MESSAGE,
   convertUatBuild,
@@ -74,6 +75,8 @@ import {
   rollbackUploadItem,
   rollbackWar,
   preflightUatBuild,
+  preflightFileMove,
+  moveFiles,
   releaseUatBuildLock,
   renameFile,
   startProfile,
@@ -389,7 +392,7 @@ describe('executeDatabaseQuery', () => {
     expect(client.get).toHaveBeenCalledWith('/files/sample/additionalConfig', { responseType: 'blob', timeout: 0 });
   });
 
-  it('uses explicit unlimited timeouts for single-file and streamed ZIP downloads', async () => {
+  it('uses explicit unlimited timeouts for single-file and prepared ZIP downloads', async () => {
     client.get.mockResolvedValueOnce({ data: new Blob(['file']), headers: {} });
     client.post.mockResolvedValueOnce({ data: new Blob(['zip']), headers: {} });
 
@@ -408,12 +411,83 @@ describe('executeDatabaseQuery', () => {
     );
   });
 
+  it('treats matching Content-Length as a complete download success', async () => {
+    const blob = new Blob(['abcdef']);
+    client.get.mockResolvedValueOnce({
+      data: blob,
+      headers: {
+        'content-disposition': 'attachment; filename="app.war"',
+        'content-length': String(blob.size),
+      },
+    });
+
+    await expect(downloadSingle('qc', 'release/app.war')).resolves.toEqual({
+      blob,
+      filename: 'app.war',
+    });
+  });
+
+  it('rejects short bodies when Content-Length is present and does not return the truncated blob', async () => {
+    client.get.mockResolvedValueOnce({
+      data: new Blob(['partial']),
+      headers: {
+        'content-disposition': 'attachment; filename="qc-download.zip"',
+        'content-length': '1024',
+      },
+    });
+
+    await expect(downloadSingle('qc', 'release/exploded-app')).rejects.toThrow(DOWNLOAD_INCOMPLETE_MESSAGE);
+  });
+
+  it('accepts downloads when Content-Length is absent', async () => {
+    const blob = new Blob(['file-bytes']);
+    client.get.mockResolvedValueOnce({
+      data: blob,
+      headers: { 'content-disposition': 'attachment; filename="app.war"' },
+    });
+
+    await expect(downloadSingle('qc', 'release/app.war')).resolves.toEqual({
+      blob,
+      filename: 'app.war',
+    });
+  });
+
+  it('parses ApiError JSON from non-200 download blobs and notifies lock conflicts', async () => {
+    const listener = vi.fn();
+    const unsubscribe = onLockConflict(listener);
+    client.get.mockRejectedValueOnce({
+      response: {
+        status: 423,
+        data: new Blob([
+          JSON.stringify({
+            code: 'RESOURCE_LOCKED',
+            message: 'Download locked',
+            paths: ['release/app.war'],
+            users: ['Alice'],
+          }),
+        ]),
+      },
+    });
+
+    await expect(downloadSingle('qc', 'release/app.war')).rejects.toMatchObject({
+      status: 423,
+      code: 'RESOURCE_LOCKED',
+      message: 'Download locked',
+      paths: ['release/app.war'],
+      users: ['Alice'],
+    });
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 423, code: 'RESOURCE_LOCKED', users: ['Alice'] }),
+    );
+    unsubscribe();
+  });
+
   it('keeps interrupted and cancelled downloads local to the download workflow', async () => {
     const listener = vi.fn();
     const unsubscribe = onBackendUnavailable(listener);
     client.get.mockRejectedValueOnce(Object.assign(new Error('connection reset'), { request: {} }));
 
-    await expect(downloadSingle('qc', 'release/exploded-app')).rejects.toThrow(DOWNLOAD_INTERRUPTED_MESSAGE);
+    await expect(downloadSingle('qc', 'release/exploded-app')).rejects.toThrow(DOWNLOAD_INCOMPLETE_MESSAGE);
     expect(listener).not.toHaveBeenCalled();
 
     client.get.mockRejectedValueOnce(Object.assign(new Error('cancelled'), { code: 'ERR_CANCELED' }));
@@ -457,6 +531,55 @@ describe('executeDatabaseQuery', () => {
       '/files/extract',
       { rootKey: 'qc', path: 'releases/app.tar.gz' },
       { timeout: 0 },
+    );
+  });
+
+  it('posts file-move preflight and execute payloads with a long execute timeout', async () => {
+    const preflight = {
+      totalCount: 1,
+      moves: [
+        {
+          sourceRootKey: 'qc',
+          sourcePath: 'lib/a.jar',
+          destinationRootKey: 'qc',
+          destinationPath: 'backup/a.jar',
+          overwrite: false,
+        },
+      ],
+      conflicts: [],
+      adminRequired: false,
+    };
+    const result = {
+      operationId: 'move-1',
+      totalCount: 1,
+      completed: [
+        {
+          sourceRootKey: 'qc',
+          sourcePath: 'lib/a.jar',
+          destinationRootKey: 'qc',
+          destinationPath: 'backup/a.jar',
+          status: 'COMPLETED',
+          message: null,
+        },
+      ],
+      failed: [],
+    };
+    client.post.mockResolvedValueOnce({ data: preflight }).mockResolvedValueOnce({ data: result });
+
+    const payload = {
+      source: { rootKey: 'qc' as const, paths: ['lib/a.jar'] },
+      destination: { rootKey: 'qc' as const, path: 'backup' },
+      overwriteConfirmed: false,
+    };
+    await expect(preflightFileMove(payload)).resolves.toEqual(preflight);
+    await expect(moveFiles({ ...payload, overwriteConfirmed: true })).resolves.toEqual(result);
+
+    expect(client.post).toHaveBeenNthCalledWith(1, '/files/move/preflight', payload, { signal: undefined });
+    expect(client.post).toHaveBeenNthCalledWith(
+      2,
+      '/files/move',
+      { ...payload, overwriteConfirmed: true },
+      { signal: undefined, timeout: 0 },
     );
   });
 

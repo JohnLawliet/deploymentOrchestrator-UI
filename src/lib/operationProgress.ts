@@ -1,4 +1,4 @@
-import type { DeploymentStatus, OperationProgress, SystemEvent } from '@/types/api-contracts';
+import type { DeploymentStatus, FileMoveProgressDto, OperationProgress, SystemEvent } from '@/types/api-contracts';
 import type { OperationMap, OperationProgressState, OperationRecord, OperationStatus } from '@/types/frontend';
 import { isFailureProgress, warRollbackPhasePercentage } from './qcWarProgress';
 
@@ -38,6 +38,14 @@ const isNullablePercentage = (value: unknown): value is number | null =>
 const isTerminalDeploymentStatus = (value: string | null | undefined): boolean =>
   value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
 
+export function isFileMoveProgress(resources: OperationProgress | FileMoveProgressDto): resources is FileMoveProgressDto {
+  return 'operationId' in resources && 'completed' in resources && Array.isArray(resources.completed);
+}
+
+function isClassicOperationProgress(resources: OperationProgress | FileMoveProgressDto): resources is OperationProgress {
+  return 'status' in resources && typeof resources.status === 'string' && !isFileMoveProgress(resources);
+}
+
 function isOperationProgressEvent(event: unknown): event is OperationProgressEvent {
   if (!isObject(event) || event.eventType !== 'OPERATION_PROGRESS' || !isObject(event.resources)) return false;
   const progress = event.resources;
@@ -72,6 +80,22 @@ export function parseOperationProgressData(data: string): OperationProgressEvent
 
 function eventKey(event: OperationProgressEvent): string {
   const progress = event.resources;
+  if (!isClassicOperationProgress(progress)) {
+    return JSON.stringify([
+      event.timestamp,
+      event.resourceKey,
+      event.resourceType,
+      deploymentIdOf(event),
+      event.username,
+      event.message,
+      progress.phaseCode,
+      progress.progressPercentage,
+      progress.operationId,
+      progress.completedCount,
+      progress.failedCount,
+      progress.pendingCount,
+    ]);
+  }
   return JSON.stringify([
     event.timestamp,
     event.resourceKey,
@@ -107,6 +131,7 @@ function pruneUnregisteredOperations(operations: OperationMap, now = Date.now())
 export function reduceOperationProgress(operations: OperationMap, event: OperationProgressEvent, now = Date.now()): OperationMap {
   const deploymentId = event.deploymentId;
   if (!deploymentId) return operations;
+  if (!isClassicOperationProgress(event.resources)) return operations;
   const existing = operations[deploymentId] || { deploymentId };
   const previous = existing.progress;
   const key = eventKey(event);
