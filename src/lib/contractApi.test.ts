@@ -41,6 +41,7 @@ import {
   DOWNLOAD_INTERRUPTED_MESSAGE,
   EXTRACTION_UNCONFIRMED_MESSAGE,
   convertUatBuild,
+  createDirectory,
   createUpload,
   deleteFiles,
   deployJar,
@@ -501,6 +502,19 @@ describe('executeDatabaseQuery', () => {
 
     expect(client.delete).toHaveBeenCalledWith('/files', {
       data: { rootKey: 'techDrive', paths: ['release/a.txt', 'release/b.txt'] },
+    });
+  });
+
+  it('creates a named directory under the supplied root-relative path', async () => {
+    const created = { name: 'September', path: 'releases/September', type: 'directory' };
+    client.post.mockResolvedValue({ data: created });
+
+    await expect(createDirectory({ rootKey: 'techDrive', path: 'releases', name: 'September' })).resolves.toEqual(created);
+
+    expect(client.post).toHaveBeenCalledWith('/files/directory', {
+      rootKey: 'techDrive',
+      path: 'releases',
+      name: 'September',
     });
   });
 

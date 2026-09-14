@@ -87,6 +87,11 @@ export interface RenameRequest {
   path: string;
   newName: string;
 }
+export interface CreateDirectoryRequest {
+  rootKey: RootKey;
+  path: string;
+  name: string;
+}
 export interface ExtractRequest {
   rootKey: RootKey;
   path: string;
@@ -749,6 +754,7 @@ export interface ApiRoutes {
   'GET /api/files/sample/additionalConfig': { response: Blob };
   'POST /api/files/download': { body: DownloadRequest; response: Blob };
   'DELETE /api/files': { body: DeleteRequest; response: void; status: 204 };
+  'POST /api/files/directory': { body: CreateDirectoryRequest; response: FileNode; status: 201 };
   'POST /api/files/rename': { body: RenameRequest; response: void };
   'POST /api/files/extract': { body: ExtractRequest; response: ExtractResponse };
   'POST /api/files/move/preflight': { body: MoveRequest; response: FileMovePreflightResponse };

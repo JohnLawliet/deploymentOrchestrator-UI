@@ -7,6 +7,7 @@ import type {
   ApiError,
   ApiHeaders,
   ApiRoutes,
+  CreateDirectoryRequest,
   DatabaseRow,
   DatabaseTable,
   DeploymentRecord,
@@ -437,6 +438,8 @@ export const downloadSelection = (rootKey: FileRoot['key'], paths: string[]): Pr
   blobRequest(client.post<Blob>('/files/download', { rootKey, paths }, { responseType: 'blob', timeout: 0 }));
 export const deleteFiles = (rootKey: FileRoot['key'], paths: string[]): Promise<void> =>
   request<void>(client.delete<void>('/files', { data: { rootKey, paths } }), 'Unable to delete the selected items');
+export const createDirectory = (payload: CreateDirectoryRequest): Promise<FileNode> =>
+  request<FileNode>(client.post<FileNode>('/files/directory', payload), 'Unable to create this folder');
 export const renameFile = (payload: RenameRequest): Promise<void> =>
   request<void>(client.post<void>('/files/rename', payload), 'Unable to rename this file or folder');
 export const extractFile = async (payload: ExtractRequest): Promise<ExtractResponse> => {

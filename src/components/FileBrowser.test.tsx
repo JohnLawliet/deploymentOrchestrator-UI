@@ -4,11 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const listFiles = vi.hoisted(() => vi.fn());
+const createDirectory = vi.hoisted(() => vi.fn());
 const deleteFiles = vi.hoisted(() => vi.fn());
 const extractFile = vi.hoisted(() => vi.fn());
 const renameFile = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/contractApi', () => ({
   EXTRACTION_UNCONFIRMED_MESSAGE: 'The extraction result could not be confirmed. Refresh the directory before trying again.',
+  createDirectory,
   deleteFiles,
   extractFile,
   listFiles,
@@ -96,6 +98,7 @@ describe('FileBrowser selectableType', () => {
     cleanup();
     vi.restoreAllMocks();
     listFiles.mockReset();
+    createDirectory.mockReset();
     deleteFiles.mockReset();
     extractFile.mockReset();
     renameFile.mockReset();
@@ -424,8 +427,77 @@ describe('FileBrowser selectableType', () => {
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
 
     rerender(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'File Actions' }));
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Select all' })).not.toBeInTheDocument();
+  });
+
+  it('orders Create new folder between Select all and File Actions and disables Copy', async () => {
+    listFiles.mockResolvedValue([{ name: 'available.xml', type: 'file' }]);
+    const user = userEvent.setup();
+    render(<StatefulFileBrowser initialSelected={['available.xml']} enableMove showSelectAll />);
+
+    const selectAll = await screen.findByRole('button', { name: 'Select all' });
+    const createFolder = screen.getByRole('button', { name: 'Create new folder' });
+    const fileActions = screen.getByRole('button', { name: 'File Actions' });
+    expect(selectAll.compareDocumentPosition(createFolder) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(createFolder.compareDocumentPosition(fileActions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(fileActions);
+    expect(screen.getByRole('button', { name: 'Move' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeDisabled();
+  });
+
+  it('creates a valid named folder in the current directory and refreshes the listing', async () => {
+    listFiles
+      .mockResolvedValueOnce([{ name: 'releases', type: 'directory' }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ name: 'September', type: 'directory' }]);
+    let finishCreate: (value: { name: string; type: string }) => void = () => undefined;
+    createDirectory.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishCreate = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<StatefulFileBrowser initialSelected={[]} />);
+
+    await user.click(await screen.findByRole('button', { name: 'releases' }));
+    await screen.findByText('This directory is empty.');
+    await user.click(screen.getByRole('button', { name: 'Create new folder' }));
+    const input = screen.getByRole('textbox', { name: 'Folder name' });
+    const submit = screen.getByRole('button', { name: 'Create folder' });
+
+    await user.type(input, '../invalid');
+    expect(submit).toBeDisabled();
+    await user.clear(input);
+    await user.type(input, 'September');
+    await user.click(submit);
+
+    expect(createDirectory).toHaveBeenCalledWith({ rootKey: 'techDrive', path: 'releases', name: 'September' });
+    expect(screen.getByRole('button', { name: 'Create folder' })).toBeDisabled();
+    finishCreate({ name: 'September', type: 'directory' });
+    await waitFor(() => expect(listFiles).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole('textbox', { name: 'Folder name' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the folder popover open and reports backend creation failures', async () => {
+    listFiles.mockResolvedValue([]);
+    createDirectory.mockRejectedValue(new Error('A folder with this name already exists.'));
+    const user = userEvent.setup();
+    render(<StatefulFileBrowser initialSelected={[]} />);
+
+    await screen.findByText('This directory is empty.');
+    await user.click(screen.getByRole('button', { name: 'Create new folder' }));
+    await user.type(screen.getByRole('textbox', { name: 'Folder name' }), 'Existing');
+    await user.click(screen.getByRole('button', { name: 'Create folder' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('A folder with this name already exists.');
+    expect(screen.getByRole('textbox', { name: 'Folder name' })).toHaveValue('Existing');
+    expect(listFiles).toHaveBeenCalledTimes(1);
   });
 
   it('requires confirmation and deletes selected files through the backend', async () => {
@@ -435,11 +507,14 @@ describe('FileBrowser selectableType', () => {
     const user = userEvent.setup();
     render(<StatefulFileBrowser initialSelected={['available.xml']} />);
 
-    const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+    await user.click(await screen.findByRole('button', { name: 'File Actions' }));
+    let deleteButton = screen.getByRole('button', { name: 'Delete' });
     expect(deleteButton).toBeEnabled();
     await user.click(deleteButton);
     expect(deleteFiles).not.toHaveBeenCalled();
 
+    await user.click(screen.getByRole('button', { name: 'File Actions' }));
+    deleteButton = screen.getByRole('button', { name: 'Delete' });
     await user.click(deleteButton);
     expect(confirm).toHaveBeenLastCalledWith(
       'Permanently delete 1 selected item(s)? Directories and their contents will be removed. This action cannot be undone.',
@@ -456,7 +531,8 @@ describe('FileBrowser selectableType', () => {
     const user = userEvent.setup();
     render(<StatefulFileBrowser initialSelected={['available.xml']} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    await user.click(await screen.findByRole('button', { name: 'File Actions' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The file is locked by another user.');
     expect(screen.getByLabelText('Select available.xml')).toBeChecked();
@@ -485,7 +561,8 @@ describe('FileBrowser selectableType', () => {
     const user = userEvent.setup();
     render(<StatefulFileBrowser initialSelected={['release']} selectableType="directory" />);
 
-    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    await user.click(await screen.findByRole('button', { name: 'File Actions' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(deleteFiles).toHaveBeenCalledWith('techDrive', ['release']));
   });
@@ -524,7 +601,8 @@ describe('FileBrowser selectableType', () => {
     const user = userEvent.setup();
     render(<StatefulFileBrowser initialSelected={['available.xml']} enableMove showSelectAll />);
 
-    const move = await screen.findByRole('button', { name: 'Move' });
+    await user.click(await screen.findByRole('button', { name: 'File Actions' }));
+    const move = screen.getByRole('button', { name: 'Move' });
     expect(move).toBeEnabled();
     await user.click(move);
     expect(await screen.findByTestId('file-move-drawer')).toHaveTextContent('Moving 1');
@@ -538,7 +616,8 @@ describe('FileBrowser selectableType', () => {
     const user = userEvent.setup();
     render(<StatefulFileBrowser initialSelected={['one.xml', 'two.xml']} enableMove />);
 
-    await user.click(await screen.findByRole('button', { name: 'Move' }));
+    await user.click(await screen.findByRole('button', { name: 'File Actions' }));
+    await user.click(screen.getByRole('button', { name: 'Move' }));
     await user.click(await screen.findByRole('button', { name: 'Complete combined move' }));
 
     await waitFor(() => expect(screen.getByTestId('selected-paths')).toHaveTextContent(/^$/));
@@ -552,7 +631,8 @@ describe('FileBrowser selectableType', () => {
     const user = userEvent.setup();
     render(<StatefulFileBrowser initialSelected={['one.xml', 'two.xml']} enableMove />);
 
-    await user.click(await screen.findByRole('button', { name: 'Move' }));
+    await user.click(await screen.findByRole('button', { name: 'File Actions' }));
+    await user.click(screen.getByRole('button', { name: 'Move' }));
     await user.click(await screen.findByRole('button', { name: 'Complete partial move' }));
 
     await waitFor(() => expect(screen.getByTestId('selected-paths')).toHaveTextContent('two.xml'));
@@ -560,8 +640,10 @@ describe('FileBrowser selectableType', () => {
 
   it('hides Move by default even on mutating roots', async () => {
     listFiles.mockResolvedValue([{ name: 'available.xml', type: 'file' }]);
+    const user = userEvent.setup();
     render(<FileBrowser rootKey="techDrive" selected={['available.xml']} onSelectionChange={vi.fn()} />);
     await screen.findByText('available.xml');
+    await user.click(screen.getByRole('button', { name: 'File Actions' }));
     expect(screen.queryByRole('button', { name: 'Move' })).not.toBeInTheDocument();
   });
 

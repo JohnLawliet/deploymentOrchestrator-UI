@@ -3,13 +3,17 @@ import {
   AlertCircle,
   ArchiveRestore,
   CheckSquare,
+  ChevronDown,
   ChevronRight,
+  Copy,
   File,
   Folder,
   FolderInput,
+  FolderPlus,
   Home,
   Loader2,
   Lock,
+  Plus,
   RefreshCw,
   Square,
   Trash2,
@@ -17,12 +21,15 @@ import {
 import {
   EXTRACTION_UNCONFIRMED_MESSAGE,
   type ApiRequestError,
+  createDirectory,
   deleteFiles,
   extractFile,
   listFiles,
   renameFile,
 } from '@/lib/contractApi';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import LockNotice from '@/components/LockNotice';
 import SearchableProfileSelect from '@/components/SearchableProfileSelect';
 import { useOptionalPortal } from '@/context/PortalContext';
@@ -97,6 +104,10 @@ export default function FileBrowser({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
+  const [creatingDirectory, setCreatingDirectory] = useState(false);
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [folderName, setFolderName] = useState('');
+  const [fileActionsOpen, setFileActionsOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [extractingPath, setExtractingPath] = useState<string | null>(null);
   const [extractedPath, setExtractedPath] = useState<string | null>(null);
@@ -170,10 +181,11 @@ export default function FileBrowser({
     const row = listRef.current?.querySelector(`[data-path="${CSS.escape(extractedPath)}"]`);
     row?.scrollIntoView({ block: 'nearest' });
   }, [extractedPath, loading]);
-  const interactionDisabled = disabled || deleting || !!renamingPath || !!extractingPath || moveOpen;
+  const interactionDisabled = disabled || creatingDirectory || deleting || !!renamingPath || !!extractingPath || moveOpen;
   const mutatingRoot = rootKey === 'techDrive' || rootKey === 'qc';
   const supportsDelete = enableDelete ?? mutatingRoot;
   const supportsMove = (enableMove ?? false) && mutatingRoot;
+  const supportsCreateDirectory = supportsDelete && mutatingRoot;
   const supportsRename = true;
   const deleteLock =
     supportsDelete || supportsMove ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
@@ -271,6 +283,22 @@ export default function FileBrowser({
       setActionError(errorMessage(reason));
     } finally {
       setDeleting(false);
+    }
+  };
+  const createNewDirectory = async () => {
+    const name = folderName.trim();
+    if (!isValidEntryName(name) || creatingDirectory || deleteLock) return;
+    setCreatingDirectory(true);
+    setActionError('');
+    try {
+      await createDirectory({ rootKey, path, name });
+      setFolderName('');
+      setCreateFolderOpen(false);
+      setRefresh((value) => value + 1);
+    } catch (reason: unknown) {
+      setActionError(errorMessage(reason));
+    } finally {
+      setCreatingDirectory(false);
     }
   };
   const renameEntry = async (entry: FileNode, relative: string, newName: string) => {
@@ -403,34 +431,114 @@ export default function FileBrowser({
               {allVisibleSelected ? 'Unselect all' : 'Select all'}
             </Button>
           )}
-          {supportsMove && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              disabled={interactionDisabled || !deletableSelections.length || !!deleteLock}
-              onClick={() => {
-                setActionError('');
-                setMoveOpen(true);
+          {supportsCreateDirectory && (
+            <Popover
+              open={createFolderOpen}
+              onOpenChange={(open) => {
+                if (creatingDirectory) return;
+                setCreateFolderOpen(open);
+                if (!open) setFolderName('');
               }}
             >
-              <FolderInput className="w-3.5 h-3.5" />
-              Move
-            </Button>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={interactionDisabled || loading || !!error || !!deleteLock}
+                >
+                  <FolderPlus className="h-3.5 w-3.5" />
+                  Create new folder
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent side="bottom" align="end" className="w-72 p-3">
+                <form
+                  aria-label="Create new folder"
+                  className="flex items-center gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void createNewDirectory();
+                  }}
+                >
+                  <Input
+                    autoFocus
+                    aria-label="Folder name"
+                    className="h-9 min-w-0"
+                    placeholder="Folder name"
+                    value={folderName}
+                    disabled={creatingDirectory}
+                    onChange={(event) => setFolderName(event.target.value)}
+                  />
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                    aria-label="Create folder"
+                    title="Create folder"
+                    disabled={!isValidEntryName(folderName.trim()) || creatingDirectory}
+                  >
+                    {creatingDirectory ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  </Button>
+                </form>
+              </PopoverContent>
+            </Popover>
           )}
-          {supportsDelete && (
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              className="gap-1.5"
-              disabled={interactionDisabled || !deletableSelections.length || !!deleteLock}
-              onClick={removeSelectedFiles}
-            >
-              {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-              {deleting ? 'Deleting…' : 'Delete'}
-            </Button>
+          {(supportsMove || supportsDelete) && (
+            <Popover open={fileActionsOpen} onOpenChange={setFileActionsOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={interactionDisabled || loading || !!error}
+                >
+                  {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  File Actions
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent side="bottom" align="end" className="w-40 p-1">
+                {supportsMove && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    disabled={interactionDisabled || !deletableSelections.length || !!deleteLock}
+                    onClick={() => {
+                      setActionError('');
+                      setFileActionsOpen(false);
+                      setMoveOpen(true);
+                    }}
+                  >
+                    <FolderInput className="h-3.5 w-3.5" />
+                    Move
+                  </Button>
+                )}
+                {supportsDelete && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2 text-destructive hover:text-destructive"
+                    disabled={interactionDisabled || !deletableSelections.length || !!deleteLock}
+                    onClick={() => {
+                      setFileActionsOpen(false);
+                      void removeSelectedFiles();
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </Button>
+                )}
+                <Button type="button" variant="ghost" size="sm" className="w-full justify-start gap-2" disabled>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              </PopoverContent>
+            </Popover>
           )}
           {/* <Button
             type="button"
@@ -678,6 +786,10 @@ function InlineRename({ name, isDirectory, canRename, isRenaming, wasRenamed, on
 function fileExtension(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(dot) : '';
+}
+
+function isValidEntryName(name: string): boolean {
+  return !!name && name !== '.' && name !== '..' && !/[\\/]/.test(name);
 }
 
 function formatSize(bytes = 0): string {
