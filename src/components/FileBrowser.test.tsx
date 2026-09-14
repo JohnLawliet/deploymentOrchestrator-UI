@@ -20,8 +20,73 @@ vi.mock('@/lib/contractApi', () => ({
 }));
 
 vi.mock('@/components/FileMoveDrawer', () => ({
-  default: ({ open, sourcePaths }: { open: boolean; sourcePaths: string[] }) =>
-    open ? <div data-testid="file-move-drawer">Moving {sourcePaths.length}</div> : null,
+  default: ({
+    open,
+    sourcePaths,
+    onFinished,
+  }: {
+    open: boolean;
+    sourcePaths: string[];
+    onFinished: (result: unknown) => void;
+  }) =>
+    open ? (
+      <div data-testid="file-move-drawer">
+        Moving {sourcePaths.length}
+        <button
+          type="button"
+          onClick={() =>
+            onFinished({
+              operationId: 'combined',
+              totalCount: 1,
+              completed: [
+                {
+                  sourceRootKey: 'techDrive',
+                  sourcePath: sourcePaths[0],
+                  destinationRootKey: 'techDrive',
+                  destinationPath: 'archive-1789387200000.zip',
+                  status: 'COMPLETED',
+                  message: null,
+                },
+              ],
+              failed: [],
+            })
+          }
+        >
+          Complete combined move
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            onFinished({
+              operationId: 'partial',
+              totalCount: 2,
+              completed: [
+                {
+                  sourceRootKey: 'techDrive',
+                  sourcePath: sourcePaths[0],
+                  destinationRootKey: 'techDrive',
+                  destinationPath: sourcePaths[0],
+                  status: 'COMPLETED',
+                  message: null,
+                },
+              ],
+              failed: [
+                {
+                  sourceRootKey: 'techDrive',
+                  sourcePath: sourcePaths[1],
+                  destinationRootKey: 'techDrive',
+                  destinationPath: sourcePaths[1],
+                  status: 'FAILED',
+                  message: 'Move failed',
+                },
+              ],
+            })
+          }
+        >
+          Complete partial move
+        </button>
+      </div>
+    ) : null,
 }));
 
 import FileBrowser from './FileBrowser';
@@ -77,12 +142,10 @@ describe('FileBrowser selectableType', () => {
   });
 
   it('refreshes, highlights the server-returned folder, and retains the archive after extraction', async () => {
-    listFiles
-      .mockResolvedValueOnce([{ name: 'app.zip', type: 'file' }])
-      .mockResolvedValueOnce([
-        { name: 'app.zip', type: 'file' },
-        { name: 'app_7', type: 'directory' },
-      ]);
+    listFiles.mockResolvedValueOnce([{ name: 'app.zip', type: 'file' }]).mockResolvedValueOnce([
+      { name: 'app.zip', type: 'file' },
+      { name: 'app_7', type: 'directory' },
+    ]);
     extractFile.mockResolvedValue({ rootKey: 'techDrive', sourcePath: 'app.zip', destinationPath: 'app_7' });
     const user = userEvent.setup();
     render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
@@ -114,7 +177,9 @@ describe('FileBrowser selectableType', () => {
 
   it('refreshes a disappeared archive and reports uncertain outcomes without retrying', async () => {
     listFiles.mockResolvedValue([{ name: 'app.zip', type: 'file' }]);
-    extractFile.mockRejectedValueOnce({ status: 404, code: 'SOURCE_NOT_FOUND', message: 'gone' }).mockRejectedValueOnce(new Error('network'));
+    extractFile
+      .mockRejectedValueOnce({ status: 404, code: 'SOURCE_NOT_FOUND', message: 'gone' })
+      .mockRejectedValueOnce(new Error('network'));
     const user = userEvent.setup();
     render(<FileBrowser rootKey="techDrive" selected={[]} onSelectionChange={vi.fn()} />);
 
@@ -457,14 +522,40 @@ describe('FileBrowser selectableType', () => {
   it('shows Move only when enableMove is set and opens the drawer for selected items', async () => {
     listFiles.mockResolvedValue([{ name: 'available.xml', type: 'file' }]);
     const user = userEvent.setup();
-    render(
-      <StatefulFileBrowser initialSelected={['available.xml']} enableMove showSelectAll />,
-    );
+    render(<StatefulFileBrowser initialSelected={['available.xml']} enableMove showSelectAll />);
 
     const move = await screen.findByRole('button', { name: 'Move' });
     expect(move).toBeEnabled();
     await user.click(move);
     expect(await screen.findByTestId('file-move-drawer')).toHaveTextContent('Moving 1');
+  });
+
+  it('deselects every original source after a successful combined move', async () => {
+    listFiles.mockResolvedValue([
+      { name: 'one.xml', type: 'file' },
+      { name: 'two.xml', type: 'file' },
+    ]);
+    const user = userEvent.setup();
+    render(<StatefulFileBrowser initialSelected={['one.xml', 'two.xml']} enableMove />);
+
+    await user.click(await screen.findByRole('button', { name: 'Move' }));
+    await user.click(await screen.findByRole('button', { name: 'Complete combined move' }));
+
+    await waitFor(() => expect(screen.getByTestId('selected-paths')).toHaveTextContent(/^$/));
+  });
+
+  it('retains failed selections after a partial plain move', async () => {
+    listFiles.mockResolvedValue([
+      { name: 'one.xml', type: 'file' },
+      { name: 'two.xml', type: 'file' },
+    ]);
+    const user = userEvent.setup();
+    render(<StatefulFileBrowser initialSelected={['one.xml', 'two.xml']} enableMove />);
+
+    await user.click(await screen.findByRole('button', { name: 'Move' }));
+    await user.click(await screen.findByRole('button', { name: 'Complete partial move' }));
+
+    await waitFor(() => expect(screen.getByTestId('selected-paths')).toHaveTextContent('two.xml'));
   });
 
   it('hides Move by default even on mutating roots', async () => {

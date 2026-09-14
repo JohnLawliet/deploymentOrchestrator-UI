@@ -54,34 +54,23 @@ export function isCrossRootArchiveRequired(sourceRootKey: RootKey, destinationRo
 }
 
 /** UI options for the move drawer given the root pair. */
-export function archiveFormatOptions(
-  sourceRootKey: RootKey,
-  destinationRootKey: RootKey,
-): FileMoveArchiveChoice[] {
+export function archiveFormatOptions(sourceRootKey: RootKey, destinationRootKey: RootKey): FileMoveArchiveChoice[] {
   if (isCrossRootArchiveRequired(sourceRootKey, destinationRootKey)) return ['ZIP', 'WAR', 'JAR'];
   return ['NONE', 'ZIP', 'WAR', 'JAR'];
 }
 
-export function defaultArchiveFormat(
-  sourceRootKey: RootKey,
-  destinationRootKey: RootKey,
-): FileMoveArchiveChoice {
+export function defaultArchiveFormat(sourceRootKey: RootKey, destinationRootKey: RootKey): FileMoveArchiveChoice {
   return isCrossRootArchiveRequired(sourceRootKey, destinationRootKey) ? 'ZIP' : 'NONE';
 }
 
-/**
- * Same-root as-is omits archiveFormat. Archiving / qc→techDrive sends explicit ZIP|WAR|JAR.
- * Never returns NONE for the wire payload.
- */
 export function archiveFormatForRequest(
   choice: FileMoveArchiveChoice,
   sourceRootKey: RootKey,
   destinationRootKey: RootKey,
-): 'ZIP' | 'WAR' | 'JAR' | undefined {
+): FileMoveArchiveChoice {
   if (isCrossRootArchiveRequired(sourceRootKey, destinationRootKey)) {
     return choice === 'NONE' ? 'ZIP' : choice;
   }
-  if (choice === 'NONE') return undefined;
   return choice;
 }
 
@@ -99,27 +88,7 @@ export function previewArchiveFileName(sourcePath: string, format: 'ZIP' | 'WAR'
   return `${stem}.${format.toLowerCase()}`;
 }
 
-export function fileMovePhaseLabel(phaseCode: string | null | undefined): string | null {
-  if (!phaseCode) return null;
-  switch (phaseCode) {
-    case 'FILE_MOVE_STARTED':
-      return 'Starting…';
-    case 'FILE_MOVE_CREATING_TEMP':
-      return 'Creating temp directory';
-    case 'FILE_MOVE_ZIPPING':
-      return 'Zipping';
-    case 'FILE_MOVE_TRANSFERRING':
-      return 'Transferring';
-    case 'FILE_MOVE_DELETING_TEMP':
-      return 'Deleting temp';
-    case 'FILE_MOVE_ITEM_COMPLETED':
-      return 'Item completed';
-    case 'FILE_MOVE_ITEM_FAILED':
-      return 'Item failed';
-    default:
-      return null;
-  }
-}
+export { fileMovePhaseLabel } from '@/lib/fileMoveProgress';
 
 export function archiveFormatLabel(choice: FileMoveArchiveChoice): string {
   if (choice === 'NONE') return 'Move as-is';

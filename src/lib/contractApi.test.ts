@@ -476,9 +476,7 @@ describe('executeDatabaseQuery', () => {
       paths: ['release/app.war'],
       users: ['Alice'],
     });
-    expect(listener).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 423, code: 'RESOURCE_LOCKED', users: ['Alice'] }),
-    );
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: 423, code: 'RESOURCE_LOCKED', users: ['Alice'] }));
     unsubscribe();
   });
 
@@ -527,22 +525,18 @@ describe('executeDatabaseQuery', () => {
       destinationPath: 'releases/app_2',
     });
 
-    expect(client.post).toHaveBeenCalledWith(
-      '/files/extract',
-      { rootKey: 'qc', path: 'releases/app.tar.gz' },
-      { timeout: 0 },
-    );
+    expect(client.post).toHaveBeenCalledWith('/files/extract', { rootKey: 'qc', path: 'releases/app.tar.gz' }, { timeout: 0 });
   });
 
-  it('posts file-move preflight and execute payloads with a long execute timeout', async () => {
+  it('transports a multi-source archive request and its one-item response unchanged', async () => {
     const preflight = {
       totalCount: 1,
       moves: [
         {
           sourceRootKey: 'qc',
-          sourcePath: 'lib/a.jar',
+          sourcePath: 'one/web.xml',
           destinationRootKey: 'qc',
-          destinationPath: 'backup/a.jar',
+          destinationPath: 'backup/archive-1789387200000.zip',
           overwrite: false,
         },
       ],
@@ -555,9 +549,9 @@ describe('executeDatabaseQuery', () => {
       completed: [
         {
           sourceRootKey: 'qc',
-          sourcePath: 'lib/a.jar',
+          sourcePath: 'one/web.xml',
           destinationRootKey: 'qc',
-          destinationPath: 'backup/a.jar',
+          destinationPath: 'backup/archive-1789387200000.zip',
           status: 'COMPLETED',
           message: null,
         },
@@ -567,9 +561,10 @@ describe('executeDatabaseQuery', () => {
     client.post.mockResolvedValueOnce({ data: preflight }).mockResolvedValueOnce({ data: result });
 
     const payload = {
-      source: { rootKey: 'qc' as const, paths: ['lib/a.jar'] },
+      source: { rootKey: 'qc' as const, paths: ['one/web.xml', 'two/web.xml'] },
       destination: { rootKey: 'qc' as const, path: 'backup' },
       overwriteConfirmed: false,
+      archiveFormat: 'ZIP' as const,
     };
     await expect(preflightFileMove(payload)).resolves.toEqual(preflight);
     await expect(moveFiles({ ...payload, overwriteConfirmed: true })).resolves.toEqual(result);

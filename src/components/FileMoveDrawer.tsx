@@ -5,26 +5,20 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Notice } from '@/components/PagePrimitives';
 import { useOptionalPortal } from '@/context/PortalContext';
-import {
-  type ApiRequestError,
-  getFileRoots,
-  getProfiles,
-  isLockConflict,
-  moveFiles,
-  preflightFileMove,
-} from '@/lib/contractApi';
+import { type ApiRequestError, getFileRoots, getProfiles, isLockConflict, moveFiles, preflightFileMove } from '@/lib/contractApi';
 import {
   archiveFormatForRequest,
   archiveFormatLabel,
   archiveFormatOptions,
   defaultArchiveFormat,
-  fileMovePhaseLabel,
   isCrossRootArchiveRequired,
   previewArchiveFileName,
   sharedProfileBasePath,
   type FileMoveArchiveChoice,
 } from '@/lib/qcProfilePaths';
+import { fileMoveDisplayPercentage, fileMovePhase, fileMovePhaseLabel, fileMoveTimeline } from '@/lib/fileMoveProgress';
 import { isFileMoveProgress } from '@/lib/operationProgress';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { errorMessage } from '@/types/frontend';
 import type {
   FileMoveConflict,
@@ -36,6 +30,35 @@ import type {
   RootKey,
   SystemEvent,
 } from '@/types/api-contracts';
+
+function FileMoveTimelineStepItem({
+  index,
+  label,
+  description,
+  current,
+}: {
+  index: number;
+  label: string;
+  description: string;
+  current: boolean;
+}) {
+  return (
+    <li className={current ? 'font-semibold text-primary' : 'text-muted-foreground'}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="cursor-help text-left underline decoration-dotted decoration-current/40 underline-offset-2"
+          >
+            <span className="mr-1 font-mono">{index}.</span>
+            {label}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{description}</TooltipContent>
+      </Tooltip>
+    </li>
+  );
+}
 
 type DrawerPhase = 'pickDest' | 'confirmOverwrite' | 'blockedAdmin' | 'moving' | 'done';
 
@@ -74,8 +97,7 @@ function moveErrorMessage(reason: unknown): string {
     return error.message || 'This move requires an administrator (qc → Tech Drive, or leaving a WildFly profile directory).';
   if (error.code === 'TARGET_EXISTS' || error.status === 409)
     return error.message || 'One or more destinations already exist. Confirm overwrite to replace them.';
-  if (error.code === 'INVALID_MOVE_REQUEST' || error.status === 400)
-    return error.message || 'This move is not allowed.';
+  if (error.code === 'INVALID_MOVE_REQUEST' || error.status === 400) return error.message || 'This move is not allowed.';
   if (error.code === 'RESOURCE_LOCKED' || error.status === 423)
     return error.message || 'The selected paths are locked by another user.';
   if (error.code === 'SOURCE_NOT_FOUND' || error.status === 404)
@@ -85,15 +107,7 @@ function moveErrorMessage(reason: unknown): string {
   return errorMessage(reason, 'Unable to move the selected items.');
 }
 
-function ItemList({
-  title,
-  items,
-  empty,
-}: {
-  title: string;
-  items: FileMoveItemOutcome[];
-  empty: string;
-}) {
+function ItemList({ title, items, empty }: { title: string; items: FileMoveItemOutcome[]; empty: string }) {
   return (
     <div className="space-y-1">
       <p className="text-xs font-semibold text-muted-foreground">
@@ -106,9 +120,7 @@ function ItemList({
           {items.map((item) => (
             <li key={`${item.sourceRootKey}:${item.sourcePath}`}>
               {item.sourcePath}
-              {item.destinationPath ? (
-                <span className="text-muted-foreground"> → {item.destinationPath}</span>
-              ) : null}
+              {item.destinationPath ? <span className="text-muted-foreground"> → {item.destinationPath}</span> : null}
               {item.message ? <span className="text-red-700"> — {item.message}</span> : null}
             </li>
           ))}
@@ -153,11 +165,6 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
   const crossRootArchive = isCrossRootArchiveRequired(sourceRootKey, destinationRootKey);
   const isArchiving = archiveChoice !== 'NONE';
 
-  const clearBlockedAdmin = useCallback(() => {
-    setPhase((current) => (current === 'blockedAdmin' ? 'pickDest' : current));
-    setError('');
-  }, []);
-
   const resetPreflightGates = useCallback(() => {
     setPhase((current) => (current === 'blockedAdmin' || current === 'confirmOverwrite' ? 'pickDest' : current));
     setPreflight(null);
@@ -168,20 +175,20 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
 
   const handleDestinationPathChange = useCallback(
     (path: string) => {
-      if (destinationPathRef.current !== path) clearBlockedAdmin();
+      if (destinationPathRef.current !== path) resetPreflightGates();
       setDestinationPath(path);
     },
-    [clearBlockedAdmin],
+    [resetPreflightGates],
   );
 
   const buildMovePayload = useCallback(
-    (overwriteConfirmed?: boolean): MoveRequest => {
+    (overwriteConfirmed = false): MoveRequest => {
       const archiveFormat = archiveFormatForRequest(archiveChoice, sourceRootKey, destinationRootKey);
       return {
         source: { rootKey: sourceRootKey, paths: sourcePaths },
         destination: { rootKey: destinationRootKey, path: destinationPath },
-        ...(overwriteConfirmed !== undefined ? { overwriteConfirmed } : {}),
-        ...(archiveFormat ? { archiveFormat } : {}),
+        overwriteConfirmed,
+        archiveFormat,
       };
     },
     [archiveChoice, destinationPath, destinationRootKey, sourcePaths, sourceRootKey],
@@ -256,25 +263,46 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
     }
     if (event.eventType === 'OPERATION_FINISHED') {
       const finishedId = event.resources.operationId || event.deploymentId;
-      if (finishedId && finishedId === operationId) setDestRefreshToken((value) => value + 1);
+      if (finishedId && finishedId === operationId) {
+        setDestRefreshToken((value) => value + 1);
+        setProgress((current) =>
+          current && current.operationId === finishedId
+            ? {
+                ...current,
+                pendingCount: 0,
+                pending: [],
+                progressPercentage: 100,
+                phaseCode: current.failedCount > 0 ? 'FILE_MOVE_ITEM_FAILED' : 'FILE_MOVE_ITEM_COMPLETED',
+              }
+            : current,
+        );
+      }
     }
   }, [lastSystemEvent, open, operationId, phase]);
 
   if (!open) return null;
 
   const invalidDestination = isSelfOrNestedDestination(sourcePaths, destinationPath);
-  const progressPercent = progress?.progressPercentage ?? (result ? 100 : 0);
+  const moveDone = phase === 'done' || !!result;
+  const progressPercent = fileMoveDisplayPercentage(progress, { done: moveDone });
   const completed = phase === 'done' && result ? result.completed : (progress?.completed ?? result?.completed ?? []);
   const failed = phase === 'done' && result ? result.failed : (progress?.failed ?? result?.failed ?? []);
   const pending = progress?.pending ?? [];
   const browserBasePath = sourceRootKey === 'qc' && !isAdmin && destinationRootKey === 'qc' ? confineBase : '.';
   const phaseLabel = fileMovePhaseLabel(progress?.phaseCode) || progress?.phaseCode || null;
+  const timelineSteps = fileMoveTimeline(isArchiving);
+  const currentTimelineId = moveDone ? 'complete' : fileMovePhase(progress?.phaseCode)?.timelineId;
+  const plannedArchiveDestination = isArchiving ? (preflight?.moves[0]?.destinationPath ?? null) : null;
   const archivePreview =
-    isArchiving && sourcePaths.length === 1
-      ? previewArchiveFileName(sourcePaths[0], archiveChoice as 'ZIP' | 'WAR' | 'JAR')
+    plannedArchiveDestination ??
+    (isArchiving && sourcePaths.length === 1
+      ? `${destinationPath === '.' ? '' : `${destinationPath}/`}${previewArchiveFileName(
+          sourcePaths[0],
+          archiveChoice as 'ZIP' | 'WAR' | 'JAR',
+        )}`
       : isArchiving
-        ? 'one archive at destination'
-        : null;
+        ? 'Generated archive name assigned during preflight'
+        : null);
 
   const runPreflight = async () => {
     if (!sourcePaths.length || busy || invalidDestination) return;
@@ -313,24 +341,20 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
       const response = await moveFiles(buildMovePayload(overwriteConfirmed));
       setOperationId(response.operationId);
       setResult(response);
-      setProgress((current) =>
-        current && current.operationId === response.operationId
-          ? current
-          : {
-              operationId: response.operationId,
-              totalCount: response.totalCount,
-              completedCount: response.completed.length,
-              failedCount: response.failed.length,
-              pendingCount: 0,
-              progressPercentage: 100,
-              currentSourcePath: null,
-              currentDestinationPath: null,
-              phaseCode: 'FILE_MOVE_ITEM_COMPLETED',
-              completed: response.completed,
-              failed: response.failed,
-              pending: [],
-            },
-      );
+      setProgress({
+        operationId: response.operationId,
+        totalCount: response.totalCount,
+        completedCount: response.completed.length,
+        failedCount: response.failed.length,
+        pendingCount: 0,
+        progressPercentage: 100,
+        currentSourcePath: null,
+        currentDestinationPath: null,
+        phaseCode: response.failed.length > 0 ? 'FILE_MOVE_ITEM_FAILED' : 'FILE_MOVE_ITEM_COMPLETED',
+        completed: response.completed,
+        failed: response.failed,
+        pending: [],
+      });
       setPhase('done');
       setDestRefreshToken((value) => value + 1);
       onFinished(response);
@@ -399,18 +423,28 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
         <div className="flex min-w-0 items-center gap-3 p-3">
           <FolderInput className="h-4 w-4 shrink-0 text-primary" />
           <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setExpanded(true)}>
-            <span className="truncate text-sm font-semibold">Move {sourcePaths.length} item(s)</span>
+            <span className="truncate text-sm font-semibold">Move {sourcePaths.length} selected item(s)</span>
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">{headerStatus}</span>
           </button>
           <Button variant="ghost" size="icon" aria-label="Expand move drawer" onClick={() => setExpanded(true)}>
             <ChevronUp className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" aria-label="Close move drawer" disabled={busy && phase === 'moving'} onClick={closeDrawer}>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Close move drawer"
+            disabled={busy && phase === 'moving'}
+            onClick={closeDrawer}
+          >
             <X className="h-4 w-4" />
           </Button>
           {(phase === 'moving' || phase === 'done') && (
             <div className="absolute bottom-0 left-0 right-0 h-1 overflow-hidden bg-muted">
               <div
+                role="progressbar"
+                aria-valuenow={Math.round(progressPercent)}
+                aria-valuemin={0}
+                aria-valuemax={100}
                 className={`h-full ${failed.length ? 'bg-red-500' : 'bg-primary'} transition-all`}
                 style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
               />
@@ -423,7 +457,7 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <FolderInput className="h-4 w-4 text-primary" />
-                Move {sourcePaths.length} item(s)
+                Move {sourcePaths.length} selected item(s)
               </CardTitle>
               <div className="flex items-center gap-2">
                 <Button variant="ghost" size="icon" aria-label="Collapse move drawer" onClick={() => setExpanded(false)}>
@@ -452,6 +486,10 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
             {(phase === 'moving' || phase === 'done') && (
               <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
+                  role="progressbar"
+                  aria-valuenow={Math.round(progressPercent)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
                   className={`h-full ${failed.length ? 'bg-red-500' : 'bg-primary'} transition-all`}
                   style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
                 />
@@ -539,24 +577,22 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
                     </p>
                   ) : isArchiving ? (
                     <p className="text-xs text-muted-foreground">
-                      Selections are packed into one archive. To explode it later, use Extract (can be slow for large WARs on
-                      Tech Drive).
+                      Selections are packed into one archive. To explode it later, use Extract (can be slow for large WARs on Tech
+                      Drive).
                     </p>
                   ) : null}
                   {archivePreview ? (
                     <p className="text-xs text-muted-foreground">
-                      Preview:{' '}
-                      <span className="font-mono text-foreground">
-                        {destinationPath === '.' ? '' : `${destinationPath}/`}
-                        {archivePreview}
-                      </span>
+                      Preview: <span className="font-mono text-foreground">{archivePreview}</span>
                     </p>
                   ) : null}
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">
                     Destination folder:{' '}
-                    <span className="font-mono text-muted-foreground">{destinationPath === '.' ? '(root)' : destinationPath}</span>
+                    <span className="font-mono text-muted-foreground">
+                      {destinationPath === '.' ? '(root)' : destinationPath}
+                    </span>
                   </p>
                   <FileBrowser
                     rootKey={destinationRootKey}
@@ -576,7 +612,11 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
                   <Button type="button" variant="outline" disabled={busy} onClick={closeDrawer}>
                     Cancel
                   </Button>
-                  <Button type="button" disabled={busy || invalidDestination || phase === 'blockedAdmin'} onClick={() => void runPreflight()}>
+                  <Button
+                    type="button"
+                    disabled={busy || invalidDestination || phase === 'blockedAdmin'}
+                    onClick={() => void runPreflight()}
+                  >
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                     {busy ? 'Checking…' : 'Move here'}
                   </Button>
@@ -586,21 +626,22 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
 
             {phase === 'confirmOverwrite' && (
               <div className="space-y-3">
-                <Notice tone="warning">
-                  These destinations already exist and will be overwritten if you continue.
-                </Notice>
+                <Notice tone="warning">These destinations already exist and will be overwritten if you continue.</Notice>
                 <ul className="max-h-40 space-y-1 overflow-y-auto font-mono text-xs">
-                  {(conflicts.length ? conflicts : conflictPaths.map((path) => ({ name: path, destinationPath: path }))).map((item) => (
-                    <li key={item.destinationPath}>
-                      {item.name}
-                      {item.destinationPath !== item.name ? ` → ${item.destinationPath}` : ''}
-                    </li>
-                  ))}
+                  {(conflicts.length ? conflicts : conflictPaths.map((path) => ({ name: path, destinationPath: path }))).map(
+                    (item) => (
+                      <li key={item.destinationPath}>
+                        {item.name}
+                        {item.destinationPath !== item.name ? ` → ${item.destinationPath}` : ''}
+                      </li>
+                    ),
+                  )}
                 </ul>
                 <p className="text-xs text-muted-foreground">
-                  {preflight?.totalCount ?? sourcePaths.length} item(s) will be moved to{' '}
+                  {preflight?.totalCount ?? sourcePaths.length} planned item(s) will be moved to{' '}
                   <span className="font-mono">
-                    {rootLabel(destinationRootKey)}/{destinationPath === '.' ? '' : destinationPath}
+                    {rootLabel(destinationRootKey)}/
+                    {plannedArchiveDestination ?? (destinationPath === '.' ? '' : destinationPath)}
                   </span>
                   {isArchiving ? ' as an archive' : ''}
                 </p>
@@ -627,13 +668,20 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
             {(phase === 'moving' || phase === 'done') && (
               <div className="space-y-4">
                 {phase === 'moving' && (
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium">{phaseLabel || 'Moving…'}</p>
-                    {progress && progress.totalCount > 1 ? (
-                      <p className="text-xs text-muted-foreground">
-                        Item {(progress.completedCount ?? 0) + (progress.failedCount ?? 0)} of {progress.totalCount}
-                      </p>
-                    ) : null}
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      {progress?.phaseCode ? (
+                        <span>
+                          Phase: <strong className="text-foreground">{phaseLabel}</strong>{' '}
+                          <span className="font-mono">({progress.phaseCode})</span>
+                        </span>
+                      ) : (
+                        <span className="text-sm font-medium text-foreground">{phaseLabel || 'Moving…'}</span>
+                      )}
+                      <span>
+                        Progress: <strong className="text-foreground">{Math.round(progressPercent)}%</strong>
+                      </span>
+                    </div>
                     {progress?.currentSourcePath ? (
                       <p className="text-xs text-muted-foreground">
                         Current: <span className="font-mono text-foreground">{progress.currentSourcePath}</span>
@@ -645,10 +693,60 @@ export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClo
                         ) : null}
                       </p>
                     ) : null}
+                    {!progress?.currentDestinationPath && plannedArchiveDestination ? (
+                      <p className="text-xs text-muted-foreground">
+                        Archive: <span className="font-mono text-foreground">{plannedArchiveDestination}</span>
+                      </p>
+                    ) : null}
+                    <TooltipProvider delayDuration={200}>
+                      <ol
+                        className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
+                        aria-label={isArchiving ? 'File move archive timeline' : 'File move timeline'}
+                      >
+                        {timelineSteps.map((step, index) => (
+                          <FileMoveTimelineStepItem
+                            key={step.id}
+                            index={index + 1}
+                            label={step.label}
+                            description={step.description}
+                            current={currentTimelineId === step.id}
+                          />
+                        ))}
+                      </ol>
+                    </TooltipProvider>
                   </div>
                 )}
                 {phase === 'done' && (
                   <>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        Phase:{' '}
+                        <strong className="text-foreground">
+                          {failed.length
+                            ? fileMovePhaseLabel('FILE_MOVE_ITEM_FAILED')
+                            : fileMovePhaseLabel('FILE_MOVE_ITEM_COMPLETED')}
+                        </strong>
+                      </span>
+                      <span>
+                        Progress: <strong className="text-foreground">100%</strong>
+                      </span>
+                    </div>
+                    <TooltipProvider delayDuration={200}>
+                      <ol
+                        className="grid gap-1 rounded-md border border-border bg-muted/15 p-2 text-xs sm:grid-cols-3"
+                        aria-label={isArchiving ? 'File move archive timeline' : 'File move timeline'}
+                      >
+                        {timelineSteps.map((step, index) => (
+                          <FileMoveTimelineStepItem
+                            key={step.id}
+                            index={index + 1}
+                            label={step.label}
+                            description={step.description}
+                            current={step.id === 'complete'}
+                          />
+                        ))}
+                      </ol>
+                    </TooltipProvider>
                     {completed.length > 0 && (
                       <div className="space-y-1">
                         <p className="text-xs font-semibold text-muted-foreground">Destination path(s)</p>

@@ -104,12 +104,13 @@ export interface MoveDestination {
   rootKey: RootKey;
   path: string;
 }
+export type FileMoveArchiveFormat = 'NONE' | 'ZIP' | 'WAR' | 'JAR';
 export interface MoveRequest {
   source: MoveSource;
   destination: MoveDestination;
-  overwriteConfirmed?: boolean;
-  /** Omit for same-root plain move. Never send NONE for qc→techDrive. */
-  archiveFormat?: 'NONE' | 'ZIP' | 'WAR' | 'JAR';
+  overwriteConfirmed: boolean;
+  /** QC-to-Tech-Drive requests must use an archive format other than NONE. */
+  archiveFormat: FileMoveArchiveFormat;
 }
 export interface FileMovePlanEntry {
   sourceRootKey: RootKey;
@@ -160,7 +161,7 @@ export interface FileMoveProgressDto {
   completedCount: number;
   failedCount: number;
   pendingCount: number;
-  progressPercentage: number;
+  progressPercentage: number | null;
   currentSourcePath: string | null;
   currentDestinationPath: string | null;
   phaseCode: FileMovePhaseCode;

@@ -38,13 +38,9 @@ describe('sharedProfileBasePath', () => {
   ];
 
   it('returns the shared profile prefix when all sources are under one profile', () => {
-    expect(
-      sharedProfileBasePath(
-        ['wildfly-26.1.3.Final_profiles/CoinDCXP2P21X/deployments/app.war'],
-        profiles,
-        qcRoot,
-      ),
-    ).toBe('wildfly-26.1.3.Final_profiles/CoinDCXP2P21X');
+    expect(sharedProfileBasePath(['wildfly-26.1.3.Final_profiles/CoinDCXP2P21X/deployments/app.war'], profiles, qcRoot)).toBe(
+      'wildfly-26.1.3.Final_profiles/CoinDCXP2P21X',
+    );
   });
 
   it('prefers the longest covering profile when nested', () => {
@@ -60,10 +56,7 @@ describe('sharedProfileBasePath', () => {
   it('returns null when sources span different profiles', () => {
     expect(
       sharedProfileBasePath(
-        [
-          'wildfly-26.1.3.Final_profiles/CoinDCXP2P21X/a.txt',
-          'wildfly-26.1.3.Final_profiles/OtherApp/b.txt',
-        ],
+        ['wildfly-26.1.3.Final_profiles/CoinDCXP2P21X/a.txt', 'wildfly-26.1.3.Final_profiles/OtherApp/b.txt'],
         profiles,
         qcRoot,
       ),
@@ -79,7 +72,7 @@ describe('archive format helpers', () => {
   it('offers Move as-is only for same-root and defaults to NONE', () => {
     expect(archiveFormatOptions('qc', 'qc')).toEqual(['NONE', 'ZIP', 'WAR', 'JAR']);
     expect(defaultArchiveFormat('qc', 'qc')).toBe('NONE');
-    expect(archiveFormatForRequest('NONE', 'qc', 'qc')).toBeUndefined();
+    expect(archiveFormatForRequest('NONE', 'qc', 'qc')).toBe('NONE');
     expect(archiveFormatForRequest('WAR', 'qc', 'qc')).toBe('WAR');
   });
 

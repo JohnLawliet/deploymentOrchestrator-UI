@@ -64,15 +64,16 @@ const isArchive = (entry: FileNode): boolean =>
 function extractionErrorMessage(reason: unknown): string {
   const error = reason as Partial<ApiRequestError>;
   if (!error.status) return EXTRACTION_UNCONFIRMED_MESSAGE;
-  if (error.status === 413 || error.code === 'ARCHIVE_LIMIT_EXCEEDED')
-    return 'The archive exceeds a server extraction limit.';
+  if (error.status === 413 || error.code === 'ARCHIVE_LIMIT_EXCEEDED') return 'The archive exceeds a server extraction limit.';
   if (error.status === 415 || error.code === 'UNSUPPORTED_ARCHIVE_FORMAT')
     return 'This archive format is unsupported or has been disabled by the server.';
   if (error.status === 422 || error.code === 'INVALID_ARCHIVE')
     return 'The archive is corrupt, unsafe, encrypted, or uses an unsupported variant.';
   if (error.code === 'ARCHIVE_CLEANUP_FAILED')
     return 'Temporary extraction output could not be completely deleted. Administrator attention is required.';
-  return typeof error.message === 'string' && error.message ? error.message : errorMessage(reason, 'Unable to extract this archive.');
+  return typeof error.message === 'string' && error.message
+    ? error.message
+    : errorMessage(reason, 'Unable to extract this archive.');
 }
 
 export default function FileBrowser({
@@ -145,7 +146,10 @@ export default function FileBrowser({
     if (path === '.' || path === floor) return [];
     if (floor === '.') return path.split('/');
     if (!path.startsWith(`${floor}/`)) return [];
-    return path.slice(floor.length + 1).split('/').filter(Boolean);
+    return path
+      .slice(floor.length + 1)
+      .split('/')
+      .filter(Boolean);
   }, [floor, path]);
   const filteredEntries = useMemo(() => {
     const normalizedFilter = fileNameFilter.trim().toLocaleLowerCase();
@@ -171,7 +175,8 @@ export default function FileBrowser({
   const supportsDelete = enableDelete ?? mutatingRoot;
   const supportsMove = (enableMove ?? false) && mutatingRoot;
   const supportsRename = true;
-  const deleteLock = supportsDelete || supportsMove ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
+  const deleteLock =
+    supportsDelete || supportsMove ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
   const entryDetails = (entry: FileNode) => {
     const isDirectory = entry.type === 'directory';
     const extensionAllowed =
@@ -322,7 +327,9 @@ export default function FileBrowser({
     }
   };
   const handleMoveFinished = (result: FileMoveResult | null) => {
-    const moved = new Set((result?.completed || []).map((item) => item.sourcePath));
+    const fullySuccessful =
+      !!result && result.totalCount > 0 && result.completed.length === result.totalCount && result.failed.length === 0;
+    const moved = new Set(fullySuccessful ? deletableSelections : (result?.completed || []).map((item) => item.sourcePath));
     if (moved.size && onSelectionChange) {
       const remaining = selected.filter((relative) => !moved.has(relative));
       const changes = selected
@@ -453,7 +460,9 @@ export default function FileBrowser({
             {actionError}
           </div>
           {extractionError?.users?.length ? <div className="mt-1">Users: {extractionError.users.join(', ')}</div> : null}
-          {extractionError?.paths?.length ? <div className="mt-1 font-mono text-xs">{extractionError.paths.join(', ')}</div> : null}
+          {extractionError?.paths?.length ? (
+            <div className="mt-1 font-mono text-xs">{extractionError.paths.join(', ')}</div>
+          ) : null}
         </div>
       )}
       <div ref={listRef} data-testid="file-browser-list" className="max-h-[500px] overflow-y-auto">
