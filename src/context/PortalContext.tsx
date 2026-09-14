@@ -11,6 +11,7 @@ import {
   getProfiles,
   getRuntimeResource,
   isBackendUnavailable,
+  loginUser,
   logoutPortalSession,
   onBackendUnavailable,
   onLockConflict,
@@ -18,7 +19,6 @@ import {
   reportUserActivity,
   setApiAdmissionStatus,
   techDriveHeaders,
-  validateUser,
 } from '@/lib/contractApi';
 import {
   findConflictingLock as findLockConflict,
@@ -823,8 +823,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       setSessionPhase('validating');
       setValidationError('');
       try {
-        const response = await validateUser(entered);
-        if (!response.valid) throw new Error('This username is not permitted to use the portal.');
+        const response = await loginUser(entered);
+        if (!response.valid) throw new Error('This username is not permitted to use the portal or incorrect credentials given');
         for (const notice of response.notices ?? []) {
           showSystemToast(notice, 'warning');
         }
@@ -836,7 +836,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         setUsername('');
         setSessionPhase('anonymous');
         setValidationState('invalid');
-        setValidationError(errorMessage(error, 'Unable to validate username.'));
+        setValidationError(errorMessage(error, 'This username is not permitted to use the portal or incorrect credentials given'));
         return false;
       }
     },

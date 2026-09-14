@@ -206,8 +206,31 @@ function safeText(value: unknown): string {
   return String(value);
 }
 
+/**
+ * Detects password-related columns that should never display raw values.
+ * Security requirement: never display, log, cache, or infer password/hash values.
+ */
+function isPasswordColumn(column: DatabaseTable['columns'][number]): boolean {
+  const key = String(column?.key || '').toLowerCase();
+  const label = String(column?.label || '').toLowerCase();
+  return (
+    key.includes('password') ||
+    key.includes('hash') ||
+    label.includes('password') ||
+    label.includes('hash') ||
+    key === 'pwd' ||
+    label === 'pwd'
+  );
+}
+
 function formatValue(column: DatabaseTable['columns'][number], value: unknown): string {
   if (value === null || value === undefined) return '—';
+  
+  // Security: Never display raw password values; only show server-provided redacted value
+  if (isPasswordColumn(column)) {
+    return safeText(value);
+  }
+  
   const type = String(column.type || 'string').toLowerCase();
   if (type === 'number') {
     const number = typeof value === 'number' ? value : Number(value);
@@ -900,8 +923,21 @@ export default function TablesPage() {
                             {displayPage.items.map((row, index) => {
                               const id = row?.[descriptor.idField];
                               const rowKey = id === null || id === undefined ? `${displayPage.page}-${index}` : String(id);
+                              
+                              // Detect file-operations grouping
+                              const isFileOperationsTable = descriptor.name === 'file-operations';
+                              const currentFileOperationId = isFileOperationsTable ? row?.['fileOperationId'] : null;
+                              const previousRow = index > 0 ? displayPage.items[index - 1] : null;
+                              const previousFileOperationId = isFileOperationsTable && previousRow ? previousRow['fileOperationId'] : null;
+                              const isNewGroup = isFileOperationsTable && currentFileOperationId !== previousFileOperationId;
+                              
                               return (
-                                <tr className="border-b border-border/70 last:border-0 hover:bg-muted/20" key={rowKey}>
+                                <tr 
+                                  className={`border-b border-border/70 last:border-0 hover:bg-muted/20 ${
+                                    isNewGroup ? 'border-t-2 border-t-primary/30' : ''
+                                  }`} 
+                                  key={rowKey}
+                                >
                                   {descriptor.columns.map((column) => {
                                     const value = formatValue(column, row?.[column.key]);
                                     const cellKey = `${rowKey}:${column.key}`;

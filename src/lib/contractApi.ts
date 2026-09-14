@@ -17,6 +17,7 @@ import type {
   FileMoveResult,
   FileNode,
   FileRoot,
+  LoginRequest,
   MoveRequest,
   JarCatalogueResponse,
   JarDeploymentRequest,
@@ -127,7 +128,7 @@ export function isBackendUnavailable(error: unknown): boolean {
 
 client.interceptors.request.use((config) => {
   const url = String(config.url || '');
-  const allowedWhileQueued = /^\/users\/(?:validate|me|queue|logout)(?:$|[/?])/.test(url);
+  const allowedWhileQueued = /^\/users\/(?:login|me|queue|logout)(?:$|[/?])/.test(url);
   if (portalAdmissionStatus === 'QUEUED' && !allowedWhileQueued) {
     const error = new Error('Portal admission is required before this request can be made.') as ApiRequestError;
     error.status = 409;
@@ -242,6 +243,19 @@ async function blobRequest(promise: Promise<AxiosResponse<Blob>>): Promise<Downl
   }
 }
 
+export const loginUser = (username: string): Promise<RouteResponse<'POST /api/users/login'>> =>
+  request<RouteResponse<'POST /api/users/login'>>(
+    client.post<RouteResponse<'POST /api/users/login'>>(
+      '/users/login',
+      { username, password: 'default' } satisfies LoginRequest,
+      {
+        headers: techDriveHeaders(username),
+      },
+    ),
+    'This username is not permitted to use the portal or incorrect credentials given',
+    false,
+    false,
+  );
 export const validateUser = (username: string): Promise<RouteResponse<'GET /api/users/validate'>> =>
   request<RouteResponse<'GET /api/users/validate'>>(
     client.get<RouteResponse<'GET /api/users/validate'>>('/users/validate', {

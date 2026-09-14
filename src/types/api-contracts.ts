@@ -33,6 +33,10 @@ export interface ApiError {
   users: string[];
 }
 
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
 export interface UserValidationResponse {
   valid: boolean;
   normalizedUsername: string;
@@ -732,6 +736,7 @@ export type UatSseEventName = 'UAT_BUILD_RUNNING' | 'UAT_BUILD_COMPLETED' | 'UAT
 export interface ApiRoutes {
   'GET /api/test': { headers: { Authorization: string }; response: string };
   'GET /api/users/validate': { response: UserValidationResponse };
+  'POST /api/users/login': { body: LoginRequest; response: UserValidationResponse };
   'GET /api/users/me': { response: PortalSessionResponse };
   'GET /api/users/queue': { response: PortalQueueResponse };
   'POST /api/users/activity': { response: void; status: 204 };
