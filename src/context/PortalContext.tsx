@@ -93,7 +93,7 @@ type PortalContextValue = ActivityMaps & {
   queuePosition: number | null;
   validationState: ValidationState;
   validationError: string;
-  acceptUser: (username: string) => Promise<boolean>;
+  acceptUser: (username: string, password?: string) => Promise<boolean>;
   changeUser: () => Promise<void>;
   handleSessionRevoked: () => void;
   forceLogoutUser: (username: string) => Promise<boolean>;
@@ -813,7 +813,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   }, [showSystemToast]);
 
   const acceptUser = useCallback(
-    async (candidate: string): Promise<boolean> => {
+    async (candidate: string, password = 'default'): Promise<boolean> => {
       const entered = candidate.trim();
       if (!entered) {
         setValidationError('Enter your username.');
@@ -823,7 +823,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       setSessionPhase('validating');
       setValidationError('');
       try {
-        const response = await loginUser(entered);
+        const response = await loginUser(entered, password);
         if (!response.valid) throw new Error('This username is not permitted to use the portal or incorrect credentials given');
         for (const notice of response.notices ?? []) {
           showSystemToast(notice, 'warning');

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Loader2, Server, ShieldCheck } from 'lucide-react';
+import { Loader2, Server, ShieldCheck, EyeIcon, EyeOffIcon } from 'lucide-react';
 import { usePortal } from '@/context/PortalContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,9 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 export default function UsernameGate() {
   const { acceptUser, validationState, validationError } = usePortal();
   const [value, setValue] = useState('');
+  const [passValue, setPassValue] = useState('default');
+  const [isEyeOpen, setIsEyeOpen] = useState(false);
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    acceptUser(value);
+    acceptUser(value, passValue);
   };
   return (
     <main className="min-h-screen grid place-items-center p-6 bg-background">
@@ -25,18 +27,36 @@ export default function UsernameGate() {
         <CardContent>
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <label className="text-sm font-medium" htmlFor="portal-username">
-                Username
-              </label>
               <Input
                 id="portal-username"
                 autoFocus
                 autoComplete="username"
+                placeholder='Username'
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder="e.g. shiladitya_thakur"
                 className="mt-2"
               />
+              <div className="relative">
+                <Input
+                  id="portal-password"
+                  autoFocus
+                  autoComplete="password"
+                  type={`${isEyeOpen ? "text" : "password"}`}
+                  value={passValue}
+                  placeholder='Password (use default)'
+                  onChange={(e) => setPassValue(e.target.value)}
+                  className="mt-2 mr-6"
+                />
+                <div 
+                  className="absolute z-10 right-3 inset-y-2.5 " 
+                  onClick={() => setIsEyeOpen(prev => !prev)}
+                >
+                {
+                  isEyeOpen ?
+                  <EyeOffIcon className="w-5 h-5 "/> : <EyeIcon className="w-5 h-5"/>
+                }
+                </div>
+              </div>
               <p className="text-xs text-muted-foreground mt-2">
                 Spaces, underscores, hyphens, and letter case are ignored when matching.
               </p>

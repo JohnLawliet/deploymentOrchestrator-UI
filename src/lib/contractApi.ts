@@ -244,11 +244,11 @@ async function blobRequest(promise: Promise<AxiosResponse<Blob>>): Promise<Downl
   }
 }
 
-export const loginUser = (username: string): Promise<RouteResponse<'POST /api/users/login'>> =>
+export const loginUser = (username: string, password: string): Promise<RouteResponse<'POST /api/users/login'>> =>
   request<RouteResponse<'POST /api/users/login'>>(
     client.post<RouteResponse<'POST /api/users/login'>>(
       '/users/login',
-      { username, password: 'default' } satisfies LoginRequest,
+      { username, password } satisfies LoginRequest,
       {
         headers: techDriveHeaders(username),
       },
