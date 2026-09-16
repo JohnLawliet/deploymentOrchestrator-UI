@@ -12,7 +12,9 @@ import TablesPage from '@/pages/TablesPage';
 import UatBuildPage from '@/pages/UatBuildPage';
 import UploadPage from '@/pages/UploadPage';
 import QueuePage from '@/pages/QueuePage';
+import ProfilePage from '@/pages/ProfilePage';
 import { usePortal } from '@/context/PortalContext';
+import { selectIsSuperAdmin, useUserStore } from '@/userStore';
 
 type RedirectState = {
   from?: {
@@ -79,6 +81,11 @@ function QueueRoute() {
   return <Navigate to="/" replace />;
 }
 
+function SuperAdminRoute() {
+  const superAdmin = useUserStore(selectIsSuperAdmin);
+  return superAdmin ? <Outlet /> : <Navigate to="/dashboard" replace />;
+}
+
 function UnknownRoute() {
   const { sessionPhase } = usePortal();
   if (sessionPhase === 'restoring' || sessionPhase === 'validating') return <ValidationScreen />;
@@ -99,6 +106,9 @@ export function AppRoutes() {
           <Route path="create-uat-build" element={<UatBuildPage />} />
           <Route path="upload" element={<UploadPage />} />
           <Route path="tables" element={<TablesPage />} />
+          <Route element={<SuperAdminRoute />}>
+            <Route path="profile" element={<ProfilePage />} />
+          </Route>
         </Route>
       </Route>
       <Route path="*" element={<UnknownRoute />} />

@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { userPresence } from '@/test/factories';
 import type { UserPresence } from '@/types/api-contracts';
 
@@ -20,6 +20,9 @@ const portal = vi.hoisted((): SidebarPortalMock => ({
   username: 'jonty',
   onlineUsers: [],
 }));
+const userState = vi.hoisted(() => ({
+  authUser: { username: 'jonty', userType: 'USER' as 'USER' | 'ADMIN' | 'SUPERADMIN' },
+}));
 
 vi.mock('@/context/PortalContext', () => ({
   usePortal: () => ({
@@ -32,8 +35,19 @@ vi.mock('@/context/PortalContext', () => ({
     onlineUsers: portal.onlineUsers,
   }),
 }));
+vi.mock('@/userStore', () => ({
+  selectUsername: (state: typeof userState) => state.authUser.username,
+  selectHasAdminAccess: (state: typeof userState) =>
+    state.authUser.userType === 'ADMIN' || state.authUser.userType === 'SUPERADMIN',
+  selectIsSuperAdmin: (state: typeof userState) => state.authUser.userType === 'SUPERADMIN',
+  useUserStore: (selector: (state: typeof userState) => unknown) => selector(userState),
+}));
 
 import Sidebar from './Sidebar';
+
+function LocationDisplay() {
+  return <span data-testid="location">{useLocation().pathname}</span>;
+}
 
 describe('Sidebar Upload navigation', () => {
   afterEach(() => {
@@ -41,6 +55,7 @@ describe('Sidebar Upload navigation', () => {
     portal.username = 'jonty';
     portal.onlineUsers = [];
     portal.isAdmin = false;
+    userState.authUser = { username: 'jonty', userType: 'USER' };
   });
 
   it('replaces the deferred hotfix item with an active Upload link', () => {
@@ -70,8 +85,24 @@ describe('Sidebar Upload navigation', () => {
     expect(portal.changeUser).toHaveBeenCalledOnce();
   });
 
+  it('opens the profile page from the account menu', async () => {
+    userState.authUser.userType = 'SUPERADMIN';
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <Sidebar />
+        <LocationDisplay />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'jonty' }));
+    await user.click(screen.getByRole('button', { name: 'Profile' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/profile');
+  });
+
   it('renders current user first, idle state, compact activity, and null activity cleanly', () => {
     portal.username = 'John_Smith';
+    userState.authUser.username = 'John_Smith';
     portal.onlineUsers = [
       userPresence({ username: 'John Smith', status: 'IDLE', revision: 2, lastActivity: null }),
       userPresence({
@@ -101,6 +132,7 @@ describe('Sidebar Upload navigation', () => {
   it('shows force logout beside other users only for admins', async () => {
     portal.isAdmin = true;
     portal.username = 'admin';
+    userState.authUser = { username: 'admin', userType: 'ADMIN' };
     portal.onlineUsers = [userPresence({ username: 'admin' }), userPresence({ username: 'amy' })];
     const user = userEvent.setup();
     render(
@@ -113,5 +145,17 @@ describe('Sidebar Upload navigation', () => {
     await user.click(screen.getByRole('button', { name: 'Actions for amy' }));
     await user.click(screen.getByRole('button', { name: 'Force logout' }));
     expect(portal.forceLogoutUser).toHaveBeenCalledWith('amy');
+  });
+
+  it('hides the profile entry from non-superadmins', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Sidebar />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'jonty' }));
+    expect(screen.queryByRole('button', { name: 'Profile' })).not.toBeInTheDocument();
   });
 });

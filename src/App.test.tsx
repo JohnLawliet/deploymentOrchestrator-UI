@@ -10,9 +10,14 @@ const portal = vi.hoisted(() => ({
   reportInteraction: vi.fn(),
   setViewingOperation: vi.fn(),
 }));
+const userState = vi.hoisted(() => ({ userType: 'USER' as 'USER' | 'ADMIN' | 'SUPERADMIN' }));
 
 vi.mock('@/context/PortalContext', () => ({
   usePortal: () => portal,
+}));
+vi.mock('@/userStore', () => ({
+  selectIsSuperAdmin: (state: typeof userState) => state.userType === 'SUPERADMIN',
+  useUserStore: (selector: (state: typeof userState) => unknown) => selector(userState),
 }));
 vi.mock('@/components/layout/Sidebar', () => ({
   default: () => <aside>Sidebar</aside>,
@@ -53,6 +58,9 @@ vi.mock('@/pages/UploadPage', () => ({
 vi.mock('@/pages/QueuePage', () => ({
   default: () => <div>Queue page</div>,
 }));
+vi.mock('@/pages/ProfilePage', () => ({
+  default: () => <div>Profile page</div>,
+}));
 
 import { AppRoutes } from './App';
 
@@ -64,6 +72,7 @@ describe('AppRoutes', () => {
     portal.validationState = 'idle';
     portal.reportInteraction.mockReset();
     portal.setViewingOperation.mockReset();
+    userState.userType = 'USER';
   });
 
   afterEach(cleanup);
@@ -146,6 +155,34 @@ describe('AppRoutes', () => {
     );
 
     expect(screen.getByText('Dashboard page')).toBeInTheDocument();
+  });
+
+  it('renders the profile page for an admitted user', () => {
+    portal.validated = true;
+    portal.sessionPhase = 'admitted';
+    userState.userType = 'SUPERADMIN';
+    render(
+      <MemoryRouter initialEntries={['/profile']}>
+        <AppRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Profile page')).toBeInTheDocument();
+    expect(screen.getByText('Sidebar')).toBeInTheDocument();
+  });
+
+  it('redirects non-superadmins away from the profile route', () => {
+    portal.validated = true;
+    portal.sessionPhase = 'admitted';
+    userState.userType = 'ADMIN';
+    render(
+      <MemoryRouter initialEntries={['/profile']}>
+        <AppRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Dashboard page')).toBeInTheDocument();
+    expect(screen.queryByText('Profile page')).not.toBeInTheDocument();
   });
 
   it('routes queued sessions to the queue page and keeps protected pages unavailable', () => {

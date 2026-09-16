@@ -187,8 +187,10 @@ export default function FileBrowser({
   const supportsMove = (enableMove ?? false) && mutatingRoot;
   const supportsCreateDirectory = supportsDelete && mutatingRoot;
   const supportsRename = true;
-  const deleteLock =
+  const mutationLock =
     supportsDelete || supportsMove ? portal?.findConflictingLock?.({ section: 'FILE', profile: rootKey, mode: 'WRITE' }) : null;
+  const deleteLock =
+    mutationLock && String(mutationLock.section || '').toUpperCase() !== 'DOWNLOAD' ? mutationLock : null;
   const entryDetails = (entry: FileNode) => {
     const isDirectory = entry.type === 'directory';
     const extensionAllowed =

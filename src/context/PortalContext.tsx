@@ -5,14 +5,11 @@ import {
   BACKEND_OFFLINE_TOAST,
   eventUrl,
   forceLogoutPortalUser,
-  getCurrentPortalSession,
   getLocks,
   getOperation,
   getProfiles,
   getRuntimeResource,
   isBackendUnavailable,
-  loginUser,
-  logoutPortalSession,
   onBackendUnavailable,
   onLockConflict,
   onSessionUnauthorized,
@@ -39,7 +36,6 @@ import {
   reduceTrackedOperationProgress,
   registerOperationInMap,
 } from '@/lib/operationProgress';
-import { getStoredPortalUsername, PORTAL_USERNAME_SESSION_KEY } from '@/lib/portalSession';
 import { useWarDeployStore } from '@/warDeployStore';
 import { UPLOAD_EVENT_TYPES } from '@/lib/uploadContract';
 import { formatCompletionNotification } from '@/lib/operationNotifications';
@@ -69,6 +65,7 @@ import type {
   RuntimeActivityModel,
 } from '@/types/frontend';
 import { errorMessage } from '@/types/frontend';
+import { selectAuthUser, selectHasAdminAccess, selectUsername, useUserStore } from '@/userStore';
 
 type ActivityMaps = {
   wildflyProfileActivityMap: Record<string, RuntimeActivityModel>;
@@ -560,10 +557,15 @@ export function mergeActivityMap(map: Record<string, RuntimeActivity>, event: Sy
 }
 
 export function PortalProvider({ children }: { children: ReactNode }) {
-  const [username, setUsername] = useState<string>(getStoredPortalUsername);
+  const authUser = useUserStore(selectAuthUser);
+  const username = useUserStore(selectUsername);
+  const isAdmin = useUserStore(selectHasAdminAccess);
+  const login = useUserStore((state) => state.login);
+  const restoreSession = useUserStore((state) => state.restoreSession);
+  const logout = useUserStore((state) => state.logout);
+  const clearUser = useUserStore((state) => state.clearUser);
   const [sessionPhase, setSessionPhase] = useState<PortalSessionPhase>('restoring');
   const [validated, setValidated] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [admissionStatus, setAdmissionStatus] = useState<AdmissionStatus | null>(null);
   const [maxOnlineUsers, setMaxOnlineUsers] = useState(0);
   const [onlineCount, setOnlineCount] = useState(0);
@@ -734,36 +736,26 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     controller?.abort();
   }, []);
 
-  const applyPortalSession = useCallback(
-    (response: PortalSessionResponse | PortalQueueResponse, fallbackUsername = '') => {
-      const canonicalUsername = String(('username' in response ? response.username : '') || fallbackUsername).trim();
-      if (!canonicalUsername) throw new Error('The backend did not return a portal username.');
-      sessionStorage.setItem(PORTAL_USERNAME_SESSION_KEY, canonicalUsername);
-      setUsername(canonicalUsername);
-      if ('isAdmin' in response) setIsAdmin(response.isAdmin === true);
-      setAdmissionStatus(response.admissionStatus);
-      setApiAdmissionStatus(response.admissionStatus);
-      setMaxOnlineUsers(Number(response.maxOnlineUsers) || 0);
-      setOnlineCount(Number(response.onlineCount) || 0);
-      setQueuePosition(response.queuePosition ?? null);
-      if (Array.isArray(response.onlineUsers)) setPresenceState(replacePresence(response.onlineUsers));
-      const admitted = response.admissionStatus === 'ADMITTED';
-      setValidated(admitted);
-      setSessionPhase(admitted ? 'admitted' : 'queued');
-      setValidationState('valid');
-      setValidationError('');
-    },
-    [],
-  );
+  const applyPortalAdmission = useCallback((response: PortalSessionResponse | PortalQueueResponse) => {
+    setAdmissionStatus(response.admissionStatus);
+    setApiAdmissionStatus(response.admissionStatus);
+    setMaxOnlineUsers(Number(response.maxOnlineUsers) || 0);
+    setOnlineCount(Number(response.onlineCount) || 0);
+    setQueuePosition(Number(response.queuePosition) || 0);
+    if (Array.isArray(response.onlineUsers)) setPresenceState(replacePresence(response.onlineUsers));
+    const admitted = response.admissionStatus === 'ADMITTED';
+    setValidated(admitted);
+    setSessionPhase(admitted ? 'admitted' : 'queued');
+    setValidationState('valid');
+    setValidationError('');
+  }, []);
 
   const clearPortalSession = useCallback(() => {
     closeSystemEventStream();
     closeQueueEventStream();
-    sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
+    clearUser();
     useWarDeployStore.getState().resetWarDeployment();
     setValidated(false);
-    setUsername('');
-    setIsAdmin(false);
     setAdmissionStatus(null);
     setApiAdmissionStatus(null);
     setMaxOnlineUsers(0);
@@ -788,23 +780,23 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     setSystemStatus('disconnected');
     setQueueStreamStatus('disconnected');
     setSnapshotRevision(0);
-  }, [closeQueueEventStream, closeSystemEventStream, setViewingOperation, updateOperations]);
+  }, [clearUser, closeQueueEventStream, closeSystemEventStream, setViewingOperation, updateOperations]);
 
   const changeUser = useCallback(async () => {
     if (sessionPhaseRef.current === 'loggingOut' || sessionPhaseRef.current === 'anonymous') return;
     setSessionPhase('loggingOut');
     try {
-      await logoutPortalSession();
+      await logout();
       clearPortalSession();
     } catch (error) {
-      if ((error as { status?: number })?.status === 401) {
+      if (!authUser || (error as { status?: number })?.status === 401) {
         clearPortalSession();
         return;
       }
       setSessionPhase(admissionStatus === 'ADMITTED' ? 'admitted' : 'queued');
       showSystemToast(errorMessage(error, 'Unable to log out.'), 'warning');
     }
-  }, [admissionStatus, clearPortalSession, showSystemToast]);
+  }, [admissionStatus, authUser, clearPortalSession, logout, showSystemToast]);
 
   const handleBackendUnavailable = useCallback(() => {
     showSystemToast(BACKEND_OFFLINE_TOAST, 'warning');
@@ -823,34 +815,32 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       setSessionPhase('validating');
       setValidationError('');
       try {
-        const response = await loginUser(entered, password);
+        const response = await login(entered, password);
         if (!response.valid) throw new Error('This username is not permitted to use the portal or incorrect credentials given');
         for (const notice of response.notices ?? []) {
           showSystemToast(notice, 'warning');
         }
-        applyPortalSession({ ...response, username: response.normalizedUsername }, entered);
+        applyPortalAdmission(response);
         return true;
       } catch (error) {
-        sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
+        clearUser();
         setValidated(false);
-        setUsername('');
         setSessionPhase('anonymous');
         setValidationState('invalid');
         setValidationError(errorMessage(error, 'This username is not permitted to use the portal or incorrect credentials given'));
         return false;
       }
     },
-    [applyPortalSession, showSystemToast],
+    [applyPortalAdmission, clearUser, login, showSystemToast],
   );
 
   useEffect(() => {
     if (restorationStartedRef.current) return;
     restorationStartedRef.current = true;
-    getCurrentPortalSession()
-      .then((response) => applyPortalSession(response, getStoredPortalUsername()))
+    restoreSession()
+      .then((response) => applyPortalAdmission(response))
       .catch((error) => {
-        sessionStorage.removeItem(PORTAL_USERNAME_SESSION_KEY);
-        setUsername('');
+        clearUser();
         setValidated(false);
         setSessionPhase('anonymous');
         setValidationState('idle');
@@ -858,7 +848,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
           showSystemToast(BACKEND_OFFLINE_TOAST, 'warning');
         }
       });
-  }, [applyPortalSession, showSystemToast]);
+  }, [applyPortalAdmission, clearUser, restoreSession, showSystemToast]);
 
   useEffect(() => {
     if (sessionPhase !== 'queued' || !username) return undefined;
@@ -886,8 +876,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       onmessage: (message) => {
         if (message.event !== 'PORTAL_QUEUE_STATUS') return;
         try {
-          const data = JSON.parse(message.data) as PortalSessionResponse;
-          applyPortalSession(data, username);
+          const data = JSON.parse(message.data) as PortalQueueResponse;
+          applyPortalAdmission(data);
           if (data.admissionStatus === 'ADMITTED') {
             intentionalQueueSseCloseRef.current = true;
             controller.abort();
@@ -919,7 +909,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       if (queueEventControllerRef.current === controller) queueEventControllerRef.current = null;
       controller.abort();
     };
-  }, [applyPortalSession, clearPortalSession, handleBackendUnavailable, sessionPhase, username]);
+  }, [applyPortalAdmission, clearPortalSession, handleBackendUnavailable, sessionPhase, username]);
 
   useEffect(() => {
     if (admissionStatus !== 'ADMITTED' || !username) return undefined;
@@ -1051,6 +1041,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         if (event.eventType === 'LOCK_CHANGED') {
           rememberLockLabel(event.resources?.lock);
           setLockState((current) => reduceLocks(current, event));
+          setLastSystemEvent(event);
           return;
         }
         if (event.eventType === 'OPERATION_FINISHED') {
@@ -1315,7 +1306,6 @@ export function PortalProvider({ children }: { children: ReactNode }) {
         showSystemToast(`${targetUsername} was logged out.`, 'success');
         return true;
       } catch (error) {
-        if ((error as { status?: number })?.status === 403) setIsAdmin(false);
         showSystemToast(errorMessage(error, `Unable to force logout ${targetUsername}.`), 'warning');
         return false;
       }

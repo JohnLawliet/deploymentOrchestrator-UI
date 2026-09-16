@@ -30,6 +30,7 @@ import type {
   RootKey,
   SystemEvent,
 } from '@/types/api-contracts';
+import { selectHasAdminAccess, useUserStore } from '@/userStore';
 
 function FileMoveTimelineStepItem({
   index,
@@ -132,7 +133,7 @@ function ItemList({ title, items, empty }: { title: string; items: FileMoveItemO
 
 export default function FileMoveDrawer({ open, sourceRootKey, sourcePaths, onClose, onFinished }: FileMoveDrawerProps) {
   const portal = useOptionalPortal();
-  const isAdmin = portal?.isAdmin === true;
+  const isAdmin = useUserStore(selectHasAdminAccess);
   const lastSystemEvent = portal?.lastSystemEvent;
 
   const destinationOptions = useMemo(() => allowedDestinationRoots(sourceRootKey, isAdmin), [sourceRootKey, isAdmin]);

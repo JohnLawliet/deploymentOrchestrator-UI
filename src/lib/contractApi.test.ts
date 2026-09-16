@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DatabaseTable, JarDeploymentRequest, UatPreflightRequest, UploadRequest } from '@/types/api-contracts';
 
-type RequestInterceptor = (config: { headers?: Record<string, string> }) => { headers: Record<string, string> };
+type RequestInterceptor = (config: { url?: string; headers?: Record<string, string> }) => {
+  url?: string;
+  headers: Record<string, string>;
+};
 type InterceptorState = { handler: RequestInterceptor | null };
 
 const { client, interceptorState } = vi.hoisted(() => {
@@ -40,8 +43,10 @@ import {
   DOWNLOAD_INCOMPLETE_MESSAGE,
   DOWNLOAD_INTERRUPTED_MESSAGE,
   EXTRACTION_UNCONFIRMED_MESSAGE,
+  changeCurrentUserPassword,
   convertUatBuild,
   createDirectory,
+  createPortalUser,
   createUpload,
   deleteFiles,
   deployJar,
@@ -55,8 +60,10 @@ import {
   getDatabaseTableRows,
   getDatabaseTables,
   getCurrentPortalSession,
+  getCurrentUserProfile,
   getLocks,
-  getPortalQueue,
+  getPortalUsers,
+  loginUser,
   getJarSnapshots,
   getUpload,
   getProfiles,
@@ -71,10 +78,13 @@ import {
   reportUserActivity,
   forceLogoutPortalUser,
   logoutPortalSession,
+  removeCurrentUserAvatar,
+  removePortalUser,
   resolvedTerminalEventUrl,
   rollbackJar,
   rollbackUploadItem,
   rollbackWar,
+  setApiAdmissionStatus,
   preflightUatBuild,
   preflightFileMove,
   moveFiles,
@@ -87,7 +97,9 @@ import {
   terminalEventUrl,
   uatBuildOperationEventUrl,
   unsubscribeProfileLogs,
-  validateUser,
+  updateCurrentUserProfile,
+  updatePortalUserRole,
+  uploadCurrentUserAvatar,
 } from './contractApi';
 
 type DatabaseQuery = DatabaseTable['queries'][number];
@@ -120,6 +132,83 @@ const requestHandler = (): RequestInterceptor => {
   if (!interceptorState.handler) throw new Error('Expected Axios request interceptor registration.');
   return interceptorState.handler;
 };
+
+describe('profile and user administration contracts', () => {
+  beforeEach(() => {
+    client.get.mockReset();
+    client.post.mockReset();
+    client.put.mockReset();
+    client.delete.mockReset();
+  });
+
+  it('loads and updates the current user profile', async () => {
+    const current = { id: 'user-1', username: 'alex', displayName: 'Alex' };
+    const payload = { displayName: 'Alex Updated', techDriveName: 'alex', aboutMe: 'Release coordinator' };
+    client.get.mockResolvedValueOnce({ data: current });
+    client.put.mockResolvedValueOnce({ data: { ...current, ...payload } });
+
+    await expect(getCurrentUserProfile()).resolves.toEqual(current);
+    await expect(updateCurrentUserProfile(payload)).resolves.toMatchObject(payload);
+    expect(client.get).toHaveBeenCalledWith('/users/me/profile');
+    expect(client.put).toHaveBeenCalledWith('/users/me/profile', payload);
+  });
+
+  it('changes passwords and manages avatar multipart payloads', async () => {
+    const password = { currentPassword: 'old-secret', newPassword: 'new-secret' };
+    const avatar = new File(['image'], 'avatar.png', { type: 'image/png' });
+    client.put.mockResolvedValue({ data: { avatarUrl: 'data:image/jpeg;base64,abc' } });
+    client.delete.mockResolvedValueOnce({ data: { avatarUrl: null } });
+
+    await changeCurrentUserPassword(password);
+    await uploadCurrentUserAvatar(avatar);
+    await removeCurrentUserAvatar();
+
+    expect(client.put).toHaveBeenNthCalledWith(1, '/users/me/password', password);
+    const avatarCall = client.put.mock.calls[1];
+    expect(avatarCall[0]).toBe('/users/me/avatar');
+    expect(avatarCall[1]).toBeInstanceOf(FormData);
+    expect((avatarCall[1] as FormData).get('avatar')).toBe(avatar);
+    expect(avatarCall[2]).toEqual({ headers: { 'Content-Type': 'multipart/form-data' } });
+    expect(client.delete).toHaveBeenCalledWith('/users/me/avatar');
+  });
+
+  it('lists, creates, removes, and changes roles using immutable encoded IDs', async () => {
+    const created = { id: 'user/2', username: 'sam', userType: 'USER' };
+    const createPayload = {
+      username: 'sam',
+      displayName: 'Sam Taylor',
+      techDriveName: 'sam',
+      initialPassword: 'temporary',
+      userType: 'USER' as const,
+    };
+    client.get.mockResolvedValueOnce({ data: [created] });
+    client.post.mockResolvedValueOnce({ data: created });
+    client.delete.mockResolvedValueOnce({ data: undefined });
+    client.put.mockResolvedValueOnce({ data: { ...created, userType: 'ADMIN' } });
+
+    await expect(getPortalUsers()).resolves.toEqual([created]);
+    await expect(createPortalUser(createPayload)).resolves.toEqual(created);
+    await removePortalUser('user/2');
+    await updatePortalUserRole('user/2', { userType: 'ADMIN' });
+
+    expect(client.get).toHaveBeenCalledWith('/users');
+    expect(client.post).toHaveBeenCalledWith('/users', createPayload);
+    expect(client.delete).toHaveBeenCalledWith('/users/user%2F2');
+    expect(client.put).toHaveBeenCalledWith('/users/user%2F2/role', { userType: 'ADMIN' });
+  });
+
+  it('normalizes user-management failures', async () => {
+    client.delete.mockRejectedValueOnce({
+      response: { status: 403, data: { message: 'Protected user', code: 'PROTECTED_USER', paths: [], users: [] } },
+    });
+
+    await expect(removePortalUser('root')).rejects.toMatchObject({
+      status: 403,
+      code: 'PROTECTED_USER',
+      message: 'Protected user',
+    });
+  });
+});
 
 describe('presence and lock contracts', () => {
   it('reports activity with an empty POST and reads the shared lock list', async () => {
@@ -167,7 +256,7 @@ describe('presence and lock contracts', () => {
     client.get.mockRejectedValueOnce({
       response: { status: 503, data: apacheHtml },
     });
-    await expect(validateUser('alice')).rejects.toMatchObject({
+    await expect(getCurrentPortalSession()).rejects.toMatchObject({
       status: 503,
       message: BACKEND_OFFLINE_MESSAGE,
     });
@@ -181,7 +270,7 @@ describe('presence and lock contracts', () => {
         data: { message: 'Internal failure', code: 'INTERNAL', paths: [], users: [], deploymentId: null },
       },
     });
-    await expect(validateUser('alice')).rejects.toMatchObject({ status: 500, message: 'Internal failure' });
+    await expect(getCurrentPortalSession()).rejects.toMatchObject({ status: 500, message: 'Internal failure' });
     expect(listener).not.toHaveBeenCalled();
     expect(
       isBackendUnavailable({
@@ -199,6 +288,7 @@ describe('presence and lock contracts', () => {
 
 describe('executeDatabaseQuery', () => {
   beforeEach(() => {
+    setApiAdmissionStatus(null);
     sessionStorage.removeItem('qc-deployment-username');
     sessionStorage.setItem('qc-portal-tab-id', 'tab-test-1');
     client.request.mockReset();
@@ -225,54 +315,61 @@ describe('executeDatabaseQuery', () => {
     expect(requestHandler()({ headers: {} })).toEqual({ headers: { 'X-Portal-Tab-Id': 'tab-test-1' } });
   });
 
-  it('validates with the candidate username header and no query parameter', async () => {
-    client.get.mockResolvedValueOnce({
-      data: {
-        valid: true,
-        normalizedUsername: 'candidate-user',
-        isAdmin: false,
-        admissionStatus: 'ADMITTED',
-        maxOnlineUsers: 5,
-        onlineCount: 1,
-        queuePosition: null,
-        onlineUsers: [],
-        notices: ['unable to access techdrive'],
-      },
-      headers: {},
-    });
-
-    await expect(validateUser(' candidate-user ')).resolves.toEqual({
+  it('logs in with the candidate username header and no query parameter', async () => {
+    const loginBody = {
       valid: true,
       normalizedUsername: 'candidate-user',
       isAdmin: false,
       admissionStatus: 'ADMITTED',
       maxOnlineUsers: 5,
       onlineCount: 1,
-      queuePosition: null,
+      queuePosition: 0,
       onlineUsers: [],
       notices: ['unable to access techdrive'],
+    };
+    client.post.mockResolvedValueOnce({
+      data: loginBody,
+      headers: {},
     });
 
-    expect(client.get).toHaveBeenCalledWith('/users/validate', {
-      headers: { 'X-TechDrive-Username': 'candidate-user', 'X-Portal-Tab-Id': 'tab-test-1' },
+    await expect(loginUser(' candidate-user ', 'default')).resolves.toEqual(loginBody);
+
+    expect(client.post).toHaveBeenCalledWith(
+      '/users/login',
+      { username: ' candidate-user ', password: 'default' },
+      {
+        headers: { 'X-TechDrive-Username': 'candidate-user', 'X-Portal-Tab-Id': 'tab-test-1' },
+      },
+    );
+  });
+
+  it('treats non-2xx login as failure without session-revoked notification', async () => {
+    const unauthorized = vi.fn();
+    const unsubscribe = onSessionUnauthorized(unauthorized);
+    client.post.mockRejectedValueOnce({
+      response: { status: 403, data: { message: 'Invalid credentials', code: 'FORBIDDEN', paths: [], users: [] } },
     });
+
+    await expect(loginUser('alice', 'wrong')).rejects.toMatchObject({
+      status: 403,
+      code: 'FORBIDDEN',
+      message: 'Invalid credentials',
+    });
+    expect(unauthorized).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   it('uses cookie-session endpoints and reports authenticated 401 responses', async () => {
     const unauthorized = vi.fn();
     const unsubscribe = onSessionUnauthorized(unauthorized);
-    client.get
-      .mockResolvedValueOnce({ data: { username: 'alice', admissionStatus: 'ADMITTED' } })
-      .mockResolvedValueOnce({ data: { admissionStatus: 'QUEUED', queuePosition: 2, onlineUsers: [] } });
+    client.get.mockResolvedValueOnce({ data: { username: 'alice', admissionStatus: 'ADMITTED' } });
     client.post.mockResolvedValue({ data: undefined });
 
     await getCurrentPortalSession();
-    await getPortalQueue();
     await logoutPortalSession();
     await forceLogoutPortalUser('bob/example');
 
-    expect(client.get).toHaveBeenNthCalledWith(1, '/users/me');
-    expect(client.get).toHaveBeenNthCalledWith(2, '/users/queue');
+    expect(client.get).toHaveBeenCalledWith('/users/me');
     expect(client.post).toHaveBeenCalledWith('/users/logout');
     expect(client.post).toHaveBeenCalledWith('/users/bob%2Fexample/force-logout');
 
@@ -280,6 +377,32 @@ describe('executeDatabaseQuery', () => {
     await expect(reportUserActivity()).rejects.toMatchObject({ status: 401 });
     expect(unauthorized).toHaveBeenCalledOnce();
     unsubscribe();
+  });
+
+  it('blocks profile, activity, and directory calls while queued', () => {
+    setApiAdmissionStatus('QUEUED');
+    const handler = requestHandler();
+
+    expect(handler({ url: '/users/me', headers: {} })).toMatchObject({
+      headers: { 'X-Portal-Tab-Id': 'tab-test-1' },
+    });
+    expect(handler({ url: '/users/login', headers: {} })).toMatchObject({
+      headers: { 'X-Portal-Tab-Id': 'tab-test-1' },
+    });
+    expect(handler({ url: '/users/logout', headers: {} })).toMatchObject({
+      headers: { 'X-Portal-Tab-Id': 'tab-test-1' },
+    });
+
+    for (const url of ['/users/me/profile', '/users/me/password', '/users/me/avatar', '/users/activity', '/users']) {
+      try {
+        handler({ url, headers: {} });
+        throw new Error(`Expected ${url} to be blocked while queued`);
+      } catch (error) {
+        expect(error).toMatchObject({ status: 409, code: 'PORTAL_ADMISSION_REQUIRED' });
+      }
+    }
+
+    setApiAdmissionStatus(null);
   });
 
   it('executes a DELETE descriptor using its metadata-provided parameters', async () => {

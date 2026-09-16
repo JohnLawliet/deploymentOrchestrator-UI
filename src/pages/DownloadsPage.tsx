@@ -29,7 +29,8 @@ export default function DownloadsPage() {
       lastSystemEvent.eventType === 'OPERATION_FINISHED' &&
       lastSystemEvent.resources?.section === 'FILE' &&
       (lastSystemEvent.resources?.resourceKey || lastSystemEvent.resourceKey) === 'FILE:qc';
-    if (lifecycle || fileCompletion) setRefreshToken((v) => v + 1);
+    const lockChanged = lastSystemEvent.eventType === 'LOCK_CHANGED';
+    if (lifecycle || fileCompletion || lockChanged) setRefreshToken((v) => v + 1);
   }, [lastSystemEvent]);
   const downloadLock = findConflictingLock?.({ section: 'DOWNLOAD', profile: 'qc', mode: 'READ' });
   const lockError = isLockConflict(error) ? error : null;

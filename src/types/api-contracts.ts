@@ -15,6 +15,7 @@ export type ProfileHealth = 'FUNCTIONAL' | 'MISSING' | 'NOT_FUNCTIONAL';
 export type RuntimeReadiness = 'NOT_VERIFIED' | 'PORT_VERIFIED' | 'HTTP_VERIFIED';
 export type RootKey = 'qc' | 'techDrive' | 'jenkinsBuild';
 export type AdmissionStatus = 'QUEUED' | 'ADMITTED';
+export type UserType = 'USER' | 'ADMIN' | 'SUPERADMIN';
 
 /** Required for every REST and SSE request except where noted otherwise. */
 export interface ApiHeaders {
@@ -37,31 +38,77 @@ export interface LoginRequest {
   username: string;
   password: string;
 }
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  userType: UserType;
+  /** Data URL (`data:image/jpeg;base64,...` or webp) or null. Never a fetchable HTTP path. */
+  avatarUrl: string | null;
+}
+export interface UserActivitySummary {
+  applications: string[];
+  deployments: { success: number; failure: number };
+  hotfixes: { success: number; failure: number };
+}
+export interface UserProfile extends AuthUser {
+  techDriveName: string;
+  aboutMe: string;
+  profileUpdatedAt: IsoDateTime;
+  activity: UserActivitySummary;
+}
+export interface ManagedPortalUser extends AuthUser {
+  techDriveName: string;
+  createdAt: IsoDateTime;
+  active: boolean;
+}
+export interface UpdateUserProfileRequest {
+  displayName: string;
+  techDriveName: string;
+  aboutMe: string;
+}
+export interface ChangeUserPasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+export interface CreatePortalUserRequest {
+  username: string;
+  displayName: string;
+  techDriveName: string;
+  initialPassword: string;
+  userType: Exclude<UserType, 'SUPERADMIN'>;
+}
+export interface UpdatePortalUserRoleRequest {
+  userType: Exclude<UserType, 'SUPERADMIN'>;
+}
 export interface UserValidationResponse {
   valid: boolean;
   normalizedUsername: string;
   isAdmin: boolean;
+  authUser?: AuthUser;
   admissionStatus: AdmissionStatus;
   maxOnlineUsers: number;
   onlineCount: number;
-  queuePosition: number | null;
+  queuePosition: number;
   onlineUsers: UserPresence[];
   notices: string[];
 }
 export interface PortalSessionResponse {
   username: string;
   isAdmin: boolean;
+  authUser?: AuthUser;
   admissionStatus: AdmissionStatus;
   maxOnlineUsers: number;
   onlineCount: number;
-  queuePosition: number | null;
+  queuePosition: number;
   onlineUsers?: UserPresence[];
 }
+/** Admission, capacity, and presence only. Queue SSE must not replace auth identity. */
 export interface PortalQueueResponse {
   admissionStatus: AdmissionStatus;
   maxOnlineUsers: number;
   onlineCount: number;
-  queuePosition: number | null;
+  queuePosition: number;
   onlineUsers: UserPresence[];
 }
 export interface FileRoot {
@@ -741,13 +788,24 @@ export type UatSseEventName = 'UAT_BUILD_RUNNING' | 'UAT_BUILD_COMPLETED' | 'UAT
 /** Exact routes, input, successful output, and special response status. */
 export interface ApiRoutes {
   'GET /api/test': { headers: { Authorization: string }; response: string };
-  'GET /api/users/validate': { response: UserValidationResponse };
   'POST /api/users/login': { body: LoginRequest; response: UserValidationResponse };
   'GET /api/users/me': { response: PortalSessionResponse };
-  'GET /api/users/queue': { response: PortalQueueResponse };
   'POST /api/users/activity': { response: void; status: 204 };
   'POST /api/users/logout': { response: void; status: 204 };
   'POST /api/users/{username}/force-logout': { path: { username: string }; response: void; status: 204 };
+  'GET /api/users/me/profile': { response: UserProfile };
+  'PUT /api/users/me/profile': { body: UpdateUserProfileRequest; response: UserProfile };
+  'PUT /api/users/me/password': { body: ChangeUserPasswordRequest; response: void; status: 204 };
+  'PUT /api/users/me/avatar': { body: FormData; response: UserProfile };
+  'DELETE /api/users/me/avatar': { response: UserProfile };
+  'GET /api/users': { response: ManagedPortalUser[] };
+  'POST /api/users': { body: CreatePortalUserRequest; response: ManagedPortalUser; status: 201 };
+  'DELETE /api/users/{userId}': { path: { userId: string }; response: void; status: 204 };
+  'PUT /api/users/{userId}/role': {
+    path: { userId: string };
+    body: UpdatePortalUserRoleRequest;
+    response: ManagedPortalUser;
+  };
   'GET /api/files/roots': { response: FileRoot[] };
   'GET /api/files/list': { query: { rootKey: RootKey; path?: string }; response: FileNode[] };
   'GET /api/files/download': { query: { rootKey: RootKey; path: string }; response: Blob };
@@ -839,7 +897,7 @@ export interface ApiRoutes {
 export interface SseRoutes {
   'GET /api/users/queue/events': {
     event: 'PORTAL_QUEUE_STATUS';
-    data: PortalSessionResponse;
+    data: PortalQueueResponse;
   };
   'GET /api/system/events': {
     event: SystemEvent['eventType'] | 'PROFILE_LOG';
@@ -858,7 +916,10 @@ export interface SseRoutes {
 }
 
 /* Error responses: every non-stream API route can return ApiError. Common
- * statuses are 400 INVALID_REQUEST, 409 conflict, 423 RESOURCE_LOCKED, and
- * 500 INTERNAL_ERROR. Jar validation can return JAR_NOT_EXECUTABLE or
+ * statuses are 400 INVALID_REQUEST / PASSWORD_UNCHANGED / INVALID_AVATAR,
+ * 401 unauthenticated or queued, 403 FORBIDDEN / CANNOT_MODIFY_SELF /
+ * PROTECTED_USER / CURRENT_PASSWORD_INVALID, 404 missing user,
+ * 409 USERNAME_IN_USE / TECHDRIVE_NAME_IN_USE / conflict, 423 RESOURCE_LOCKED,
+ * and 500 INTERNAL_ERROR. Jar validation can return JAR_NOT_EXECUTABLE or
  * INVALID_HEALTH_URL. Treat nullable fields as potentially absent only for
  * UatOperationResponse, where Jackson omits null values. */

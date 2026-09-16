@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   Rocket,
   FolderDown,
@@ -18,6 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { usePortal } from '@/context/PortalContext';
 import { isOperationTerminal } from '@/lib/operationProgress';
 import OnlineUsersList from '@/components/OnlineUsersList';
+import { selectHasAdminAccess, selectIsSuperAdmin, selectUsername, useUserStore } from '@/userStore';
 
 const APP_NAME = import.meta.env.VITE_APP_NAME || 'Deployment Orchestrator';
 
@@ -60,7 +61,11 @@ const navItems = [
 ];
 
 export default function Sidebar() {
-  const { username, changeUser, forceLogoutUser, isAdmin, systemStatus, operations, onlineUsers = [] } = usePortal();
+  const { changeUser, forceLogoutUser, systemStatus, operations, onlineUsers = [] } = usePortal();
+  const username = useUserStore(selectUsername);
+  const isAdmin = useUserStore(selectHasAdminAccess);
+  const superAdmin = useUserStore(selectIsSuperAdmin);
+  const navigate = useNavigate();
   const activeOperations = Object.values(operations).filter((item) => !isOperationTerminal(item)).length;
   return (
     <aside
@@ -142,6 +147,11 @@ export default function Sidebar() {
               </Button>
             </PopoverTrigger>
             <PopoverContent side="right" align="end" sideOffset={8} className="z-[100] w-40 p-1">
+              {superAdmin && (
+                <Button variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => navigate('/profile')}>
+                  Profile
+                </Button>
+              )}
               <Button variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => void changeUser()}>
                 Log out
               </Button>

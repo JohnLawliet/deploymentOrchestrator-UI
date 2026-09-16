@@ -7,7 +7,9 @@ import type {
   ApiError,
   ApiHeaders,
   ApiRoutes,
+  ChangeUserPasswordRequest,
   CreateDirectoryRequest,
+  CreatePortalUserRequest,
   DatabaseRow,
   DatabaseTable,
   DeploymentRecord,
@@ -26,6 +28,7 @@ import type {
   JarPreflightCheckResponse,
   JarSnapshotSummary,
   LockInfo,
+  ManagedPortalUser,
   PortStatus,
   Profile,
   ProfilePowerResponse,
@@ -38,6 +41,9 @@ import type {
   UatPreflightResponse,
   UploadRequest,
   UploadResponse,
+  UpdatePortalUserRoleRequest,
+  UpdateUserProfileRequest,
+  UserProfile,
   WarDeploymentRequest,
   WarDeploymentStartResponse,
   WarPreflightResponse,
@@ -129,7 +135,7 @@ export function isBackendUnavailable(error: unknown): boolean {
 
 client.interceptors.request.use((config) => {
   const url = String(config.url || '');
-  const allowedWhileQueued = /^\/users\/(?:login|me|queue|logout)(?:$|[/?])/.test(url);
+  const allowedWhileQueued = /^\/users\/(?:login|logout)(?:$|[?])|^\/users\/me(?:$|[?])/.test(url);
   if (portalAdmissionStatus === 'QUEUED' && !allowedWhileQueued) {
     const error = new Error('Portal admission is required before this request can be made.') as ApiRequestError;
     error.status = 409;
@@ -257,26 +263,11 @@ export const loginUser = (username: string, password: string): Promise<RouteResp
     false,
     false,
   );
-export const validateUser = (username: string): Promise<RouteResponse<'GET /api/users/validate'>> =>
-  request<RouteResponse<'GET /api/users/validate'>>(
-    client.get<RouteResponse<'GET /api/users/validate'>>('/users/validate', {
-      headers: techDriveHeaders(username),
-    }),
-    'Unable to validate this username',
-    false,
-    false,
-  );
 export const getCurrentPortalSession = (): Promise<RouteResponse<'GET /api/users/me'>> =>
   request<RouteResponse<'GET /api/users/me'>>(
     client.get<RouteResponse<'GET /api/users/me'>>('/users/me'),
     'Unable to restore the portal session',
     false,
-    false,
-  );
-export const getPortalQueue = (): Promise<RouteResponse<'GET /api/users/queue'>> =>
-  request<RouteResponse<'GET /api/users/queue'>>(
-    client.get<RouteResponse<'GET /api/users/queue'>>('/users/queue'),
-    'Unable to refresh the admission queue',
     false,
   );
 export const reportUserActivity = (): Promise<void> =>
@@ -288,6 +279,39 @@ export const forceLogoutPortalUser = (username: string): Promise<void> =>
     client.post<void>(`/users/${encodeURIComponent(username)}/force-logout`),
     `Unable to force logout ${username}`,
     false,
+  );
+export const getCurrentUserProfile = (): Promise<UserProfile> =>
+  request<UserProfile>(client.get<UserProfile>('/users/me/profile'), 'Unable to load your profile');
+export const updateCurrentUserProfile = (payload: UpdateUserProfileRequest): Promise<UserProfile> =>
+  request<UserProfile>(client.put<UserProfile>('/users/me/profile', payload), 'Unable to update your profile');
+export const changeCurrentUserPassword = (payload: ChangeUserPasswordRequest): Promise<void> =>
+  request<void>(client.put<void>('/users/me/password', payload), 'Unable to change your password');
+export const uploadCurrentUserAvatar = (file: File): Promise<UserProfile> => {
+  const body = new FormData();
+  body.append('avatar', file);
+  return request<UserProfile>(
+    client.put<UserProfile>('/users/me/avatar', body, { headers: { 'Content-Type': 'multipart/form-data' } }),
+    'Unable to update your profile image',
+  );
+};
+export const removeCurrentUserAvatar = (): Promise<UserProfile> =>
+  request<UserProfile>(client.delete<UserProfile>('/users/me/avatar'), 'Unable to remove your profile image');
+export const getPortalUsers = (): Promise<ManagedPortalUser[]> =>
+  request<ManagedPortalUser[]>(client.get<ManagedPortalUser[]>('/users'), 'Unable to load portal users');
+export const createPortalUser = (payload: CreatePortalUserRequest): Promise<ManagedPortalUser> =>
+  request<ManagedPortalUser>(client.post<ManagedPortalUser>('/users', payload), 'Unable to add this user');
+export const removePortalUser = (userId: string): Promise<void> =>
+  request<void>(
+    client.delete<void>(`/users/${encodeURIComponent(userId)}`),
+    'Unable to remove this user',
+  );
+export const updatePortalUserRole = (
+  userId: string,
+  payload: UpdatePortalUserRoleRequest,
+): Promise<ManagedPortalUser> =>
+  request<ManagedPortalUser>(
+    client.put<ManagedPortalUser>(`/users/${encodeURIComponent(userId)}/role`, payload),
+    'Unable to update this user role',
   );
 export const getLocks = (): Promise<LockInfo[]> =>
   request<LockInfo[]>(client.get<LockInfo[]>('/locks'), 'Unable to reconcile shared locks', false);

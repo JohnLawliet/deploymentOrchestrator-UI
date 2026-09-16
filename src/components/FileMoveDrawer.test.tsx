@@ -24,16 +24,19 @@ vi.mock('@/lib/contractApi', () => ({
 }));
 
 const portalState = vi.hoisted(() => ({
-  isAdmin: false,
   lastSystemEvent: null as SystemEvent | null,
 }));
+const userState = vi.hoisted(() => ({ isAdmin: false }));
 
 vi.mock('@/context/PortalContext', () => ({
   useOptionalPortal: () => ({
-    isAdmin: portalState.isAdmin,
     lastSystemEvent: portalState.lastSystemEvent,
     findConflictingLock: () => null,
   }),
+}));
+vi.mock('@/userStore', () => ({
+  selectHasAdminAccess: (state: typeof userState) => state.isAdmin,
+  useUserStore: (selector: (state: typeof userState) => unknown) => selector(userState),
 }));
 
 import FileMoveDrawer from './FileMoveDrawer';
@@ -47,7 +50,7 @@ describe('FileMoveDrawer', () => {
     listFiles.mockReset();
     getProfiles.mockReset();
     getFileRoots.mockReset();
-    portalState.isAdmin = false;
+    userState.isAdmin = false;
     portalState.lastSystemEvent = null;
   });
 
@@ -306,7 +309,7 @@ describe('FileMoveDrawer', () => {
   });
 
   it('defaults qc→techDrive to Zip and never offers Move as-is', async () => {
-    portalState.isAdmin = true;
+    userState.isAdmin = true;
     listFiles.mockResolvedValue([]);
     preflightFileMove.mockResolvedValue({
       totalCount: 1,

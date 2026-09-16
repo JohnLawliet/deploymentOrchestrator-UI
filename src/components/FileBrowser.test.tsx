@@ -2,12 +2,17 @@ import { useState, type ComponentProps } from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { lockInfo } from '@/test/factories';
+import type { LockInfo } from '@/types/api-contracts';
 
 const listFiles = vi.hoisted(() => vi.fn());
 const createDirectory = vi.hoisted(() => vi.fn());
 const deleteFiles = vi.hoisted(() => vi.fn());
 const extractFile = vi.hoisted(() => vi.fn());
 const renameFile = vi.hoisted(() => vi.fn());
+const portal = vi.hoisted(() => ({
+  findConflictingLock: vi.fn(() => null as LockInfo | null),
+}));
 vi.mock('@/lib/contractApi', () => ({
   EXTRACTION_UNCONFIRMED_MESSAGE: 'The extraction result could not be confirmed. Refresh the directory before trying again.',
   createDirectory,
@@ -19,6 +24,9 @@ vi.mock('@/lib/contractApi', () => ({
   moveFiles: vi.fn(),
   isLockConflict: (error: unknown) =>
     typeof error === 'object' && error !== null && (error as { status?: number }).status === 423,
+}));
+vi.mock('@/context/PortalContext', () => ({
+  useOptionalPortal: () => portal,
 }));
 
 vi.mock('@/components/FileMoveDrawer', () => ({
@@ -102,6 +110,8 @@ describe('FileBrowser selectableType', () => {
     deleteFiles.mockReset();
     extractFile.mockReset();
     renameFile.mockReset();
+    portal.findConflictingLock.mockReset();
+    portal.findConflictingLock.mockReturnValue(null);
   });
 
   it('shows Extract here only for supported archive files, including mixed case and .tar.gz', async () => {
@@ -276,6 +286,60 @@ describe('FileBrowser selectableType', () => {
     expect(await screen.findByLabelText('Select locked.xml')).toBeDisabled();
     expect(screen.getByLabelText('Select available.xml')).toBeEnabled();
     expect(screen.getByTitle('WRITE')).toBeInTheDocument();
+  });
+
+  it('trusts list locked flags so parents and siblings stay selectable during a nested archive lock', async () => {
+    listFiles.mockResolvedValue([
+      { name: 'wildfly-26.1.3', type: 'directory', locked: false },
+      { name: 'exploded-app.war', type: 'directory', locked: true, lockMode: 'READ' },
+      { name: 'sibling.xml', type: 'file', locked: false },
+      { name: 'locked.zip', type: 'file', locked: true, lockMode: 'READ' },
+    ]);
+    render(<FileBrowser rootKey="qc" selected={[]} onSelectionChange={vi.fn()} />);
+
+    expect(await screen.findByLabelText('Select wildfly-26.1.3')).toBeEnabled();
+    expect(screen.getByLabelText('Select sibling.xml')).toBeEnabled();
+    expect(screen.getByLabelText('Select exploded-app.war')).toBeDisabled();
+    expect(screen.getAllByTitle('READ')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Extract here locked.zip' })).toBeDisabled();
+    expect(screen.getByText('exploded-app.war')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText('locked.zip')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText('sibling.xml')).toHaveAttribute('title', 'Rename');
+  });
+
+  it('does not show a qc-root lock notice for another user’s DOWNLOAD READ lock', async () => {
+    portal.findConflictingLock.mockReturnValue(
+      lockInfo({
+        section: 'DOWNLOAD',
+        profile: 'qc',
+        mode: 'READ',
+        owner: 'Mary Smith',
+        reason: 'Preparing qc-download.zip',
+      }),
+    );
+    listFiles.mockResolvedValue([{ name: 'sibling.xml', type: 'file', locked: false }]);
+    render(<FileBrowser rootKey="qc" selected={[]} onSelectionChange={vi.fn()} />);
+
+    expect(await screen.findByLabelText('Select sibling.xml')).toBeEnabled();
+    expect(screen.queryByText('Locked by Mary Smith')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create new folder' })).toBeEnabled();
+  });
+
+  it('still shows a root lock notice for another user’s FILE WRITE lock', async () => {
+    portal.findConflictingLock.mockReturnValue(
+      lockInfo({
+        section: 'FILE',
+        profile: 'qc',
+        mode: 'WRITE',
+        owner: 'Mary Smith',
+        reason: 'Moving files',
+      }),
+    );
+    listFiles.mockResolvedValue([{ name: 'sibling.xml', type: 'file', locked: false }]);
+    render(<FileBrowser rootKey="qc" selected={[]} onSelectionChange={vi.fn()} />);
+
+    expect(await screen.findByText('Locked by Mary Smith')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create new folder' })).toBeDisabled();
   });
 
   it('shows Tech Drive provisioning failures and keeps retry available', async () => {

@@ -21,7 +21,7 @@ const api = vi.hoisted(() => ({
   logoutPortalSession: vi.fn(),
   forceLogoutPortalUser: vi.fn(),
   reportUserActivity: vi.fn(),
-  validateUser: vi.fn(),
+  loginUser: vi.fn(),
 }));
 const stream = vi.hoisted(() => ({ fetchEventSource: vi.fn<typeof fetchEventSource>() }));
 
@@ -61,10 +61,11 @@ vi.mock('@/lib/contractApi', () => ({
     ...(username ? { 'X-TechDrive-Username': username } : {}),
     'X-Portal-Tab-Id': 'tab-test-1',
   }),
-  validateUser: api.validateUser,
+  loginUser: api.loginUser,
 }));
 
 import { PortalProvider, usePortal } from './PortalContext';
+import { useUserStore } from '@/userStore';
 
 function Harness() {
   const portal = usePortal();
@@ -81,6 +82,9 @@ function Harness() {
       <span data-testid="validation-error">{portal.validationError}</span>
       <span data-testid="frontend-profiles">{JSON.stringify(portal.frontendProfileActivityMap)}</span>
       <span data-testid="jar-profiles">{JSON.stringify(portal.jarProfileActivityMap)}</span>
+      <span data-testid="last-system-event">
+        {portal.lastSystemEvent && 'eventType' in portal.lastSystemEvent ? portal.lastSystemEvent.eventType : ''}
+      </span>
       <button type="button" onClick={portal.reportInteraction}>
         Interact
       </button>
@@ -158,6 +162,7 @@ const lockConflictError = (): ApiRequestError =>
 
 describe('PortalProvider collaboration contracts', () => {
   beforeEach(() => {
+    useUserStore.getState().clearUser();
     sessionStorage.setItem('qc-deployment-username', 'John Smith');
     api.getCurrentPortalSession.mockResolvedValue({
       username: 'John Smith',
@@ -165,16 +170,16 @@ describe('PortalProvider collaboration contracts', () => {
       admissionStatus: 'ADMITTED',
       maxOnlineUsers: 5,
       onlineCount: 1,
-      queuePosition: null,
+      queuePosition: 0,
     });
-    api.validateUser.mockResolvedValue({
+    api.loginUser.mockResolvedValue({
       valid: true,
       normalizedUsername: 'John Smith',
       isAdmin: false,
       admissionStatus: 'ADMITTED',
       maxOnlineUsers: 5,
       onlineCount: 1,
-      queuePosition: null,
+      queuePosition: 0,
       onlineUsers: [],
       notices: [],
     });
@@ -190,6 +195,7 @@ describe('PortalProvider collaboration contracts', () => {
 
   afterEach(() => {
     cleanup();
+    useUserStore.getState().clearUser();
     sessionStorage.clear();
     vi.restoreAllMocks();
     api.getLocks.mockReset();
@@ -200,7 +206,7 @@ describe('PortalProvider collaboration contracts', () => {
     api.reportUserActivity.mockReset();
     api.logoutPortalSession.mockReset();
     api.forceLogoutPortalUser.mockReset();
-    api.validateUser.mockReset();
+    api.loginUser.mockReset();
     api.lockConflictHandler = null;
     api.backendUnavailableHandler = null;
     api.sessionUnauthorizedHandler = null;
@@ -277,6 +283,48 @@ describe('PortalProvider collaboration contracts', () => {
     );
     expect(screen.getByTestId('users')).toBeEmptyDOMElement();
     expect(screen.getByTestId('locks')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('last-system-event')).toHaveTextContent('LOCK_CHANGED');
+  });
+
+  it('publishes LOCK_CHANGED acquire and release on lastSystemEvent', async () => {
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(stream.fetchEventSource).toHaveBeenCalled());
+    const options = streamOptions();
+    const downloadLock = lockInfo({
+      resourceKey: 'logical:download:qc',
+      owner: 'Mary Smith',
+      section: 'DOWNLOAD',
+      profile: 'qc',
+      mode: 'READ',
+      revision: 3,
+      expiresAt: '2099-01-01T00:00:00Z',
+    });
+
+    send(
+      options,
+      systemEvent({
+        eventType: 'LOCK_CHANGED',
+        state: 'ACQUIRED',
+        resources: { action: 'ACQUIRED', lock: downloadLock },
+      }),
+    );
+    expect(screen.getByTestId('locks')).toHaveTextContent('logical:download:qc');
+    expect(screen.getByTestId('last-system-event')).toHaveTextContent('LOCK_CHANGED');
+
+    send(
+      options,
+      systemEvent({
+        eventType: 'LOCK_CHANGED',
+        state: 'RELEASED',
+        resources: { action: 'RELEASED', lock: { ...downloadLock, revision: 4 } },
+      }),
+    );
+    expect(screen.getByTestId('locks')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('last-system-event')).toHaveTextContent('LOCK_CHANGED');
   });
 
   it('applies portal-wide frontend association updates once without lifecycle reconciliation', async () => {
@@ -372,14 +420,14 @@ describe('PortalProvider collaboration contracts', () => {
 
   it('surfaces Tech Drive share notices as warning toasts without blocking login', async () => {
     api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
-    api.validateUser.mockResolvedValue({
+    api.loginUser.mockResolvedValue({
       valid: true,
       normalizedUsername: 'johnsmith',
       isAdmin: false,
       admissionStatus: 'ADMITTED',
       maxOnlineUsers: 5,
       onlineCount: 1,
-      queuePosition: null,
+      queuePosition: 0,
       onlineUsers: [],
       notices: ['unable to access techdrive'],
     });
@@ -398,14 +446,14 @@ describe('PortalProvider collaboration contracts', () => {
 
   it('surfaces Tech Drive directory-created notices as warning toasts', async () => {
     api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
-    api.validateUser.mockResolvedValue({
+    api.loginUser.mockResolvedValue({
       valid: true,
       normalizedUsername: 'johnsmith',
       isAdmin: false,
       admissionStatus: 'ADMITTED',
       maxOnlineUsers: 5,
       onlineCount: 1,
-      queuePosition: null,
+      queuePosition: 0,
       onlineUsers: [],
       notices: ["directory isn't present so the directory with same name has been created"],
     });
@@ -426,14 +474,14 @@ describe('PortalProvider collaboration contracts', () => {
 
   it('does not toast when validate notices are empty or omitted', async () => {
     api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
-    api.validateUser.mockResolvedValue({
+    api.loginUser.mockResolvedValue({
       valid: true,
       normalizedUsername: 'johnsmith',
       isAdmin: false,
       admissionStatus: 'ADMITTED',
       maxOnlineUsers: 5,
       onlineCount: 1,
-      queuePosition: null,
+      queuePosition: 0,
       onlineUsers: [],
     });
 
@@ -449,9 +497,9 @@ describe('PortalProvider collaboration contracts', () => {
     expect(screen.getByTestId('system-toasts')).toBeEmptyDOMElement();
   });
 
-  it('keeps login failed and skips notice toasts when validateUser rejects', async () => {
+  it('keeps login failed and skips notice toasts when loginUser rejects', async () => {
     api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
-    api.validateUser.mockRejectedValue(new Error('Unknown user.'));
+    api.loginUser.mockRejectedValue(new Error('Unknown user.'));
 
     render(
       <PortalProvider>
@@ -644,9 +692,9 @@ describe('PortalProvider collaboration contracts', () => {
     expect(api.reportUserActivity).not.toHaveBeenCalled();
   });
 
-  it('keeps a queued session when validate returns QUEUED and opens only the queue stream', async () => {
+  it('keeps a queued session when login returns QUEUED and opens only the queue stream', async () => {
     api.getCurrentPortalSession.mockRejectedValueOnce(Object.assign(new Error('No session'), { status: 401 }));
-    api.validateUser.mockResolvedValueOnce({
+    api.loginUser.mockResolvedValueOnce({
       valid: true,
       normalizedUsername: 'John Smith',
       isAdmin: false,
@@ -667,6 +715,11 @@ describe('PortalProvider collaboration contracts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('queued'));
     expect(screen.getByTestId('username')).toHaveTextContent('John Smith');
+    expect(useUserStore.getState().authUser).toMatchObject({
+      username: 'John Smith',
+      userType: 'USER',
+      avatarUrl: null,
+    });
     expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/users/queue/events'))).toBe(true);
     expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/system/events'))).toBe(false);
   });
@@ -699,6 +752,101 @@ describe('PortalProvider collaboration contracts', () => {
       onlineUsers: [],
     });
     await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('admitted'));
+    await waitFor(() =>
+      expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/system/events'))).toBe(true),
+    );
+  });
+
+  it('restores queued identity from GET /users/me without admitting', async () => {
+    const avatarUrl = 'data:image/jpeg;base64,queued';
+    api.getCurrentPortalSession.mockResolvedValueOnce({
+      username: 'Mary Smith',
+      isAdmin: true,
+      authUser: {
+        id: 'user-mary',
+        username: 'Mary Smith',
+        displayName: 'Mary Smith',
+        userType: 'SUPERADMIN',
+        avatarUrl,
+      },
+      admissionStatus: 'QUEUED',
+      maxOnlineUsers: 8,
+      onlineCount: 8,
+      queuePosition: 2,
+      onlineUsers: [],
+    });
+
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('queued'));
+    expect(screen.getByTestId('username')).toHaveTextContent('Mary Smith');
+    expect(useUserStore.getState().authUser).toEqual({
+      id: 'user-mary',
+      username: 'Mary Smith',
+      displayName: 'Mary Smith',
+      userType: 'SUPERADMIN',
+      avatarUrl,
+    });
+    expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/users/queue/events'))).toBe(true);
+    expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/system/events'))).toBe(false);
+  });
+
+  it('keeps login identity when queue SSE admits the user without authUser', async () => {
+    const avatarUrl = 'data:image/jpeg;base64,abc';
+    api.getCurrentPortalSession.mockResolvedValueOnce({
+      username: 'Mary Smith',
+      isAdmin: true,
+      authUser: {
+        id: 'user-root',
+        username: 'Mary Smith',
+        displayName: 'Mary Smith',
+        userType: 'SUPERADMIN',
+        avatarUrl,
+      },
+      admissionStatus: 'QUEUED',
+      maxOnlineUsers: 5,
+      onlineCount: 5,
+      queuePosition: 2,
+      onlineUsers: [],
+    });
+
+    render(
+      <PortalProvider>
+        <Harness />
+      </PortalProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('queued'));
+    expect(useUserStore.getState().authUser).toMatchObject({
+      id: 'user-root',
+      userType: 'SUPERADMIN',
+      avatarUrl,
+      displayName: 'Mary Smith',
+    });
+
+    const queueOptions = streamOptions('/users/queue/events');
+    await openStream(queueOptions);
+    sendQueueStatus(queueOptions, {
+      username: 'Mary Smith',
+      isAdmin: true,
+      admissionStatus: 'ADMITTED',
+      maxOnlineUsers: 5,
+      onlineCount: 4,
+      queuePosition: 0,
+      onlineUsers: [],
+    });
+
+    await waitFor(() => expect(screen.getByTestId('session-phase')).toHaveTextContent('admitted'));
+    expect(useUserStore.getState().authUser).toEqual({
+      id: 'user-root',
+      username: 'Mary Smith',
+      displayName: 'Mary Smith',
+      userType: 'SUPERADMIN',
+      avatarUrl,
+    });
     await waitFor(() =>
       expect(stream.fetchEventSource.mock.calls.some(([url]) => String(url).includes('/system/events'))).toBe(true),
     );
