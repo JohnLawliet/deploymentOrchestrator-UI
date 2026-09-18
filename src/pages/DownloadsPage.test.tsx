@@ -8,7 +8,9 @@ import type { LockInfo, SystemEvent } from '@/types/api-contracts';
 const api = vi.hoisted(() => ({
   getFileRoots: vi.fn(),
   listFiles: vi.fn(),
-  downloadSelection: vi.fn(),
+  listPreparedDownloads: vi.fn(),
+  prepareArchiveDownload: vi.fn(),
+  startPreparedArchiveTransfer: vi.fn(),
   downloadSingle: vi.fn(),
   saveBlob: vi.fn(),
   isLockConflict: vi.fn(() => false),
@@ -30,7 +32,9 @@ vi.mock('@/lib/contractApi', () => ({
   EXTRACTION_UNCONFIRMED_MESSAGE: 'The extraction result could not be confirmed. Refresh the directory before trying again.',
   getFileRoots: api.getFileRoots,
   listFiles: api.listFiles,
-  downloadSelection: api.downloadSelection,
+  listPreparedDownloads: api.listPreparedDownloads,
+  prepareArchiveDownload: api.prepareArchiveDownload,
+  startPreparedArchiveTransfer: api.startPreparedArchiveTransfer,
   downloadSingle: api.downloadSingle,
   saveBlob: api.saveBlob,
   isLockConflict: api.isLockConflict,
@@ -79,6 +83,7 @@ describe('DownloadsPage', () => {
     portal.locks = {};
     portal.findConflictingLock.mockImplementation((scopes) => findConflictingLock(portal.locks, 'John', scopes));
     api.getFileRoots.mockResolvedValue([{ key: 'qc', path: '/qc' }]);
+    api.listPreparedDownloads.mockResolvedValue([]);
     api.listFiles.mockResolvedValue([
       { name: 'wildfly-26.1.3', type: 'directory', locked: false },
       { name: 'sibling.xml', type: 'file', locked: false },
@@ -143,5 +148,81 @@ describe('DownloadsPage', () => {
 
     expect(screen.getByRole('button', { name: 'Download selection' })).toBeDisabled();
     expect(screen.getAllByText('Locked by Mary Smith').length).toBeGreaterThan(0);
+  });
+
+  it('saves a single regular file through the blob download helper', async () => {
+    const result = { blob: new Blob(['jar']), filename: 'sibling.xml' };
+    api.downloadSingle.mockResolvedValue(result);
+    const user = userEvent.setup();
+    render(<DownloadsPage />);
+
+    await user.click(await screen.findByLabelText('Select sibling.xml'));
+    await user.click(screen.getByRole('button', { name: 'Download selection' }));
+
+    await waitFor(() => expect(api.saveBlob).toHaveBeenCalledWith(result));
+    expect(api.downloadSingle).toHaveBeenCalledWith('qc', 'sibling.xml');
+    expect(api.prepareArchiveDownload).not.toHaveBeenCalled();
+    expect(api.startPreparedArchiveTransfer).not.toHaveBeenCalled();
+  });
+
+  it('shows Preparing download... only while the archive POST runs, then starts the browser transfer', async () => {
+    let resolvePrepare: ((value: { downloadToken: string }) => void) | undefined;
+    api.prepareArchiveDownload.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePrepare = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<DownloadsPage />);
+
+    await user.click(await screen.findByLabelText('Select wildfly-26.1.3'));
+    await user.click(screen.getByRole('button', { name: 'Download selection' }));
+
+    expect(await screen.findByRole('button', { name: 'Preparing download...' })).toBeDisabled();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(document.querySelector('[role="progressbar"]')).toBeNull();
+
+    resolvePrepare?.({ downloadToken: 'opaque-token' });
+
+    await waitFor(() => expect(api.startPreparedArchiveTransfer).toHaveBeenCalledWith('opaque-token'));
+    expect(api.prepareArchiveDownload).toHaveBeenCalledWith('qc', ['wildfly-26.1.3']);
+    expect(api.downloadSingle).not.toHaveBeenCalled();
+    expect(api.saveBlob).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Download selection' })).toBeDisabled());
+  });
+
+  it('retries an UNFINISHED archive with the token URL and does not POST prepare again', async () => {
+    api.listPreparedDownloads.mockResolvedValue([
+      {
+        downloadToken: 'retry-token',
+        fileName: 'qc-download.zip',
+        size: 2048,
+        status: 'UNFINISHED',
+        createdAt: '2026-09-18T00:00:00Z',
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<DownloadsPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    expect(api.startPreparedArchiveTransfer).toHaveBeenCalledWith('retry-token');
+    expect(api.prepareArchiveDownload).not.toHaveBeenCalled();
+  });
+
+  it('disables retry while a prepared archive is DOWNLOADING', async () => {
+    api.listPreparedDownloads.mockResolvedValue([
+      {
+        downloadToken: 'busy-token',
+        fileName: 'qc-download.zip',
+        size: 10,
+        status: 'DOWNLOADING',
+        createdAt: '2026-09-18T00:00:00Z',
+      },
+    ]);
+    render(<DownloadsPage />);
+
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeDisabled();
   });
 });

@@ -128,6 +128,17 @@ export interface DownloadRequest {
   rootKey: RootKey;
   paths: string[];
 }
+export interface PreparedArchiveDownload {
+  downloadToken: string;
+}
+export type PreparedDownloadStatus = 'READY' | 'DOWNLOADING' | 'UNFINISHED';
+export interface DownloadArchiveView {
+  downloadToken: string;
+  fileName: string;
+  size: number;
+  status: PreparedDownloadStatus;
+  createdAt: IsoDateTime;
+}
 export type DeleteRequest = DownloadRequest;
 export interface RenameRequest {
   rootKey: RootKey;
@@ -810,7 +821,9 @@ export interface ApiRoutes {
   'GET /api/files/list': { query: { rootKey: RootKey; path?: string }; response: FileNode[] };
   'GET /api/files/download': { query: { rootKey: RootKey; path: string }; response: Blob };
   'GET /api/files/sample/additionalConfig': { response: Blob };
-  'POST /api/files/download': { body: DownloadRequest; response: Blob };
+  'POST /api/files/download': { body: DownloadRequest; response: Blob | PreparedArchiveDownload };
+  'GET /api/files/download/{downloadToken}': { path: { downloadToken: string }; response: Blob };
+  'GET /api/files/downloads': { response: DownloadArchiveView[] };
   'DELETE /api/files': { body: DeleteRequest; response: void; status: 204 };
   'POST /api/files/directory': { body: CreateDirectoryRequest; response: FileNode; status: 201 };
   'POST /api/files/rename': { body: RenameRequest; response: void };

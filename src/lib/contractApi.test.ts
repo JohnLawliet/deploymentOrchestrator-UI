@@ -51,8 +51,11 @@ import {
   deleteFiles,
   deployJar,
   downloadAdditionalConfigSample,
-  downloadSelection,
   downloadSingle,
+  listPreparedDownloads,
+  prepareArchiveDownload,
+  preparedArchiveUrl,
+  startPreparedArchiveTransfer,
   downloadTerminal,
   executeDatabaseQuery,
   executeUpload,
@@ -516,23 +519,60 @@ describe('executeDatabaseQuery', () => {
     expect(client.get).toHaveBeenCalledWith('/files/sample/additionalConfig', { responseType: 'blob', timeout: 0 });
   });
 
-  it('uses explicit unlimited timeouts for single-file and prepared ZIP downloads', async () => {
+  it('uses an explicit unlimited timeout for single-file downloads', async () => {
     client.get.mockResolvedValueOnce({ data: new Blob(['file']), headers: {} });
-    client.post.mockResolvedValueOnce({ data: new Blob(['zip']), headers: {} });
 
     await downloadSingle('qc', 'release/app.war');
-    await downloadSelection('qc', ['release/exploded-app']);
 
     expect(client.get).toHaveBeenCalledWith('/files/download', {
       params: { rootKey: 'qc', path: 'release/app.war' },
       responseType: 'blob',
       timeout: 0,
     });
+  });
+
+  it('prepares a multi-file archive as JSON without treating the POST as a blob', async () => {
+    client.post.mockResolvedValueOnce({ data: { downloadToken: 'opaque-token' } });
+
+    await expect(prepareArchiveDownload('qc', ['release/exploded-app'])).resolves.toEqual({ downloadToken: 'opaque-token' });
+
     expect(client.post).toHaveBeenCalledWith(
       '/files/download',
       { rootKey: 'qc', paths: ['release/exploded-app'] },
-      { responseType: 'blob', timeout: 0 },
+      { timeout: 0 },
     );
+  });
+
+  it('lists prepared archives for the current user', async () => {
+    const archives = [
+      {
+        downloadToken: 'opaque-token',
+        fileName: 'qc-download.zip',
+        size: 12,
+        status: 'UNFINISHED',
+        createdAt: '2026-09-18T00:00:00Z',
+      },
+    ];
+    client.get.mockResolvedValueOnce({ data: archives });
+
+    await expect(listPreparedDownloads()).resolves.toEqual(archives);
+    expect(client.get).toHaveBeenCalledWith('/files/downloads');
+  });
+
+  it('starts the prepared ZIP transfer with a cookie-only browser navigation', () => {
+    const assign = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, assign } });
+    try {
+      expect(preparedArchiveUrl('token/with spaces')).toMatch(
+        /\/deploymentOrchestrator\/api\/files\/download\/token%2Fwith%20spaces$/,
+      );
+      startPreparedArchiveTransfer('opaque-token');
+      expect(assign).toHaveBeenCalledWith(preparedArchiveUrl('opaque-token'));
+      expect(client.get).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    }
   });
 
   it('treats matching Content-Length as a complete download success', async () => {

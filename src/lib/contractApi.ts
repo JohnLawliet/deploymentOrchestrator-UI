@@ -14,6 +14,7 @@ import type {
   DatabaseTable,
   DeploymentRecord,
   DeploymentStartResponse,
+  DownloadArchiveView,
   ExtractRequest,
   ExtractResponse,
   FileMovePreflightResponse,
@@ -30,6 +31,7 @@ import type {
   LockInfo,
   ManagedPortalUser,
   PortStatus,
+  PreparedArchiveDownload,
   Profile,
   ProfilePowerResponse,
   RuntimeResource,
@@ -458,8 +460,22 @@ export const downloadSingle = (rootKey: FileRoot['key'], path: string): Promise<
   blobRequest(client.get<Blob>('/files/download', { params: { rootKey, path }, responseType: 'blob', timeout: 0 }));
 export const downloadAdditionalConfigSample = (): Promise<DownloadResult> =>
   blobRequest(client.get<Blob>('/files/sample/additionalConfig', { responseType: 'blob', timeout: 0 }));
-export const downloadSelection = (rootKey: FileRoot['key'], paths: string[]): Promise<DownloadResult> =>
-  blobRequest(client.post<Blob>('/files/download', { rootKey, paths }, { responseType: 'blob', timeout: 0 }));
+export const prepareArchiveDownload = (
+  rootKey: FileRoot['key'],
+  paths: string[],
+): Promise<PreparedArchiveDownload> =>
+  request<PreparedArchiveDownload>(
+    client.post<PreparedArchiveDownload>('/files/download', { rootKey, paths }, { timeout: 0 }),
+    'Unable to prepare the archive',
+  );
+export const listPreparedDownloads = (): Promise<DownloadArchiveView[]> =>
+  request<DownloadArchiveView[]>(client.get<DownloadArchiveView[]>('/files/downloads'), 'Unable to load prepared downloads');
+export function preparedArchiveUrl(downloadToken: string): string {
+  return `${apiBaseUrl}/files/download/${encodeURIComponent(downloadToken)}`;
+}
+export function startPreparedArchiveTransfer(downloadToken: string): void {
+  window.location.assign(preparedArchiveUrl(downloadToken));
+}
 export const deleteFiles = (rootKey: FileRoot['key'], paths: string[]): Promise<void> =>
   request<void>(client.delete<void>('/files', { data: { rootKey, paths } }), 'Unable to delete the selected items');
 export const createDirectory = (payload: CreateDirectoryRequest): Promise<FileNode> =>

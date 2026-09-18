@@ -1,15 +1,40 @@
 import { useEffect, useState } from 'react';
 import { Download, Loader2, RefreshCw } from 'lucide-react';
 import FileBrowser from '@/components/FileBrowser';
-import { downloadSelection, downloadSingle, getFileRoots, isLockConflict, saveBlob } from '@/lib/contractApi';
+import {
+  downloadSingle,
+  isLockConflict,
+  getFileRoots,
+  listPreparedDownloads,
+  prepareArchiveDownload,
+  saveBlob,
+  startPreparedArchiveTransfer,
+} from '@/lib/contractApi';
 import { usePortal } from '@/context/PortalContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Notice, Page } from '@/components/PagePrimitives';
 import LockNotice from '@/components/LockNotice';
 import PageTutorial from '@/components/PageTutorial';
-import type { FileRoot } from '@/types/api-contracts';
+import type { DownloadArchiveView, FileRoot } from '@/types/api-contracts';
 import { downloadsTutorialSteps } from '@/lib/pageTutorials';
+
+function formatArchiveSize(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return '—';
+  if (size < 1024) return `${size} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = size / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
+function canRetryArchive(status: DownloadArchiveView['status']): boolean {
+  return status === 'READY' || status === 'UNFINISHED';
+}
 
 export default function DownloadsPage() {
   const { lastSystemEvent, findConflictingLock } = usePortal();
@@ -17,11 +42,17 @@ export default function DownloadsPage() {
   const [selected, setSelected] = useState<string[]>([]);
   const [selectionTypes, setSelectionTypes] = useState<Record<string, 'file' | 'directory'>>({});
   const [downloading, setDownloading] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [archives, setArchives] = useState<DownloadArchiveView[]>([]);
+  const [archivesError, setArchivesError] = useState<unknown>(null);
   const [error, setError] = useState<unknown>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   useEffect(() => {
     getFileRoots().then(setRoots).catch(setError);
   }, []);
+  useEffect(() => {
+    listPreparedDownloads().then(setArchives).catch(setArchivesError);
+  }, [refreshToken]);
   useEffect(() => {
     if (!lastSystemEvent || !('eventType' in lastSystemEvent)) return;
     const lifecycle = ['RESOURCE_ACTIVE', 'RESOURCE_FAILED', 'RESOURCE_INACTIVE'].includes(lastSystemEvent.eventType);
@@ -35,31 +66,43 @@ export default function DownloadsPage() {
   const downloadLock = findConflictingLock?.({ section: 'DOWNLOAD', profile: 'qc', mode: 'READ' });
   const lockError = isLockConflict(error) ? error : null;
   const errorText = error instanceof Error ? error.message : error === null ? '' : String(error);
+  const archivesErrorText =
+    archivesError instanceof Error ? archivesError.message : archivesError === null ? '' : String(archivesError);
+  const busy = downloading || preparing;
+
+  const refreshArchives = () => {
+    setArchivesError(null);
+    setRefreshToken((v) => v + 1);
+  };
 
   const download = async () => {
     if (!selected.length) return;
     if (downloadLock) return;
-    setDownloading(true);
+    const singleFile = selected.length === 1 && selectionTypes[selected[0]] === 'file';
     setError(null);
+    if (singleFile) setDownloading(true);
+    else setPreparing(true);
     try {
-      const result =
-        selected.length === 1 && selectionTypes[selected[0]] === 'file'
-          ? await downloadSingle('qc', selected[0])
-          : await downloadSelection('qc', selected);
-      saveBlob(result);
+      if (singleFile) saveBlob(await downloadSingle('qc', selected[0]));
+      else {
+        const prepared = await prepareArchiveDownload('qc', selected);
+        startPreparedArchiveTransfer(prepared.downloadToken);
+        refreshArchives();
+      }
       setSelected([]);
       setSelectionTypes({});
     } catch (e: unknown) {
       setError(e);
     } finally {
       setDownloading(false);
+      setPreparing(false);
     }
   };
 
   return (
     <Page
       title="Download files"
-      description="Browse within the QC filesystem root and download files or ZIP selections prepared on the server."
+      description="Browse within the QC filesystem root and download a single file, or prepare a ZIP for directories and multiple items."
       headerAction={<PageTutorial steps={downloadsTutorialSteps} />}
     >
       <Card>
@@ -73,7 +116,7 @@ export default function DownloadsPage() {
                   : 'Loading exposed roots…'}
               </CardDescription>
             </div>
-            <Button variant="outline" size="sm" onClick={() => setRefreshToken((v) => v + 1)}>
+            <Button variant="outline" size="sm" onClick={refreshArchives}>
               <RefreshCw className="w-3.5 h-3.5" />
             </Button>
           </div>
@@ -129,14 +172,52 @@ export default function DownloadsPage() {
           <div className="flex flex-wrap items-center justify-between gap-3" data-tour="download-action">
             <p className="text-sm text-muted-foreground">
               {selected.length
-                ? `${selected.length} item(s) selected. Multiple items are returned as qc-download.zip.`
+                ? `${selected.length} item(s) selected. Directories or multiple items are prepared as qc-download.zip, then the browser downloads the archive.`
                 : 'Select one or more files or directories.'}
             </p>
-            <Button className="gap-2" disabled={!selected.length || downloading || !!downloadLock} onClick={download}>
-              {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              {downloading ? 'Preparing download…' : 'Download selection'}
+            <Button className="gap-2" disabled={!selected.length || busy || !!downloadLock} onClick={download}>
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {preparing ? 'Preparing download...' : downloading ? 'Downloading…' : 'Download selection'}
             </Button>
           </div>
+        </CardContent>
+      </Card>
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Prepared archives</CardTitle>
+          <CardDescription>
+            READY and UNFINISHED zips can be retried with the same download URL. Do not prepare again.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {Boolean(archivesError) && <Notice tone="error">{archivesErrorText}</Notice>}
+          {!archives.length && !archivesError ? (
+            <p className="text-sm text-muted-foreground">No prepared archives for this user.</p>
+          ) : (
+            <ul className="space-y-2">
+              {archives.map((archive) => (
+                <li
+                  key={archive.downloadToken}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
+                >
+                  <div>
+                    <div className="font-medium">{archive.fileName}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {archive.status} · {formatArchiveSize(archive.size)} · {new Date(archive.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!canRetryArchive(archive.status)}
+                    onClick={() => startPreparedArchiveTransfer(archive.downloadToken)}
+                  >
+                    Retry
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
         </CardContent>
       </Card>
     </Page>

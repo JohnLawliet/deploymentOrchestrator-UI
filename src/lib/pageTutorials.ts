@@ -268,6 +268,6 @@ export const downloadsTutorialSteps: TutorialStep[] = [
     target: '[data-tour="download-action"]',
     title: 'Download the selection',
     instruction: 'Select Download selection after choosing one or more items.',
-    why: 'One selected file downloads directly; directories or multiple items are returned as a ZIP archive prepared on the server before transfer.',
+    why: 'One selected file downloads directly. Directories or multiple items are prepared as qc-download.zip, then the browser transfers that archive. Unfinished zips can be retried from the list without preparing again.',
   },
 ];
